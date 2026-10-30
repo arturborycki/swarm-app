@@ -5,6 +5,12 @@
 //! `docs/DESIGN.md` §9b in the swarm-term repo). Fork-specific switches live
 //! here so the diff against upstream stays easy to find.
 
+#[cfg(unix)]
+pub mod sessions;
+
+/// Swarm's own window chrome (title bar, session menus) instead of Warp's.
+pub const SWARM_CHROME: bool = true;
+
 /// The product name shown in menus and titles.
 pub const APP_NAME: &str = "Swarm";
 
@@ -17,6 +23,17 @@ pub const SKIP_WARP_ONBOARDING: bool = true;
 pub struct ReattachTab {
     pub session_id: String,
     pub warp_session_id: u64,
+}
+
+#[cfg(unix)]
+impl ReattachTab {
+    /// The tab for a daemon session, if it has Warp shell integration (it was
+    /// started by this app).
+    pub fn for_session(session: &warp_terminal::local_tty::daemon::DaemonSession) -> Option<Self> {
+        use warp_terminal::local_tty::daemon::META_SESSION_ID;
+        let warp_session_id = session.ui.get(META_SESSION_ID)?.parse().ok()?;
+        Some(ReattachTab { session_id: session.id.clone(), warp_session_id })
+    }
 }
 
 /// Whether shells live in `swarmd` sessions. Then Warp's own window/tab

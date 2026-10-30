@@ -127,6 +127,10 @@ pub enum AutoCloudHandoffTrigger {
 
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
+    /// swarm-term: open the menu of detached daemon sessions.
+    SwarmShowDetachedMenu,
+    /// swarm-term: open a tab attached to a running daemon session.
+    SwarmReattach(crate::swarm::ReattachTab),
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1127,6 +1131,8 @@ impl WorkspaceAction {
             | OpenCLIAgentToolbarEditor
             | OpenHeaderToolbarEditor
             | ShowHeaderToolbarContextMenu { .. }
+            | SwarmShowDetachedMenu
+            | SwarmReattach(_)
             | Reauth
             | SignupAnonymousUser
             | LogOut

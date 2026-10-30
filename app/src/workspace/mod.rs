@@ -77,6 +77,8 @@ use crate::workspace::view::{
 pub fn init(app: &mut AppContext) {
     app.add_singleton_model(|_| WorkspaceRegistry::new());
     app.add_singleton_model(|_| cross_window_tab_drag::CrossWindowTabDrag::new());
+    #[cfg(unix)]
+    app.add_singleton_model(crate::swarm::sessions::SwarmSessions::new);
     use warpui::keymap::macros::*;
     app.register_binding_validator::<Workspace>(is_binding_pty_compliant);
 

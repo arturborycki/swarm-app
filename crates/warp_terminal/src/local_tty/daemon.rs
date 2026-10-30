@@ -77,6 +77,51 @@ pub fn without_reattach_keys(
     env
 }
 
+pub use swarm_client::swarm_proto::SessionInfo as DaemonSession;
+
+/// Calls `on_change` from a background thread with the full session list, now
+/// and after every change, reconnecting (and starting the daemon) as needed.
+/// Stops once `on_change` returns `false`.
+pub fn watch_sessions(on_change: impl Fn(Vec<DaemonSession>) -> bool + Send + 'static) {
+    let spawned = std::thread::Builder::new().name("swarm-sessions".into()).spawn(move || {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
+        rt.block_on(async move {
+            loop {
+                match watch_once(&on_change).await {
+                    Ok(false) => return,
+                    Ok(true) => {}
+                    Err(e) => log::debug!("swarm: session watch: {e:#}"),
+                }
+                tokio::time::sleep(Duration::from_secs(2)).await;
+            }
+        });
+    });
+    if let Err(e) = spawned {
+        log::warn!("swarm: can't start session watcher: {e}");
+    }
+}
+
+/// One connection's worth of watching. `Ok(false)`: the consumer is gone.
+async fn watch_once(on_change: &impl Fn(Vec<DaemonSession>) -> bool) -> Result<bool> {
+    let client = Client::connect_local("swarm-ui").await?;
+    let mut events = client.subscribe().await?;
+    loop {
+        if !on_change(client.list().await?) {
+            return Ok(false);
+        }
+        // Wake on the next event, or every few seconds so a dead daemon is
+        // noticed (the next `list` fails and we reconnect).
+        if let Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) =
+            tokio::time::timeout(Duration::from_secs(5), events.recv()).await
+        {
+            return Ok(true);
+        }
+        // Coalesce bursts (several sessions producing output) into one refresh.
+        tokio::time::sleep(Duration::from_millis(150)).await;
+        while events.try_recv().is_ok() {}
+    }
+}
+
 /// A daemon session to open as a tab at launch.
 #[derive(Debug, Clone)]
 pub struct ReattachTab {
@@ -191,7 +236,11 @@ impl DaemonSpawner {
             let (client, info, att) = self.rt.block_on(async {
                 let client = self.client().await?;
                 let att = client.attach(&id, AttachMode::Full, Some(to_size(&size)), false).await?;
-                let info = att.info.clone();
+                // Open as a tab again: reopen it at the next launch too.
+                let mut ui = BTreeMap::new();
+                ui.insert(META_AUTO_ATTACH.to_string(), "true".to_string());
+                let update = swarm_client::swarm_proto::MetaUpdate { name: None, ui };
+                let info = client.set_meta(&id, update).await.unwrap_or_else(|_| att.info.clone());
                 anyhow::Ok((client, info, att))
             })?;
             log::info!("swarm: re-attached to daemon session {id} (pid {})", info.pid);

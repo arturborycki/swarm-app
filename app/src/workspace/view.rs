@@ -604,6 +604,7 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 /// Save position for the tab bar.
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
+const SWARM_DETACHED_BUTTON_POSITION_ID: &str = "workspace_view:swarm_detached_button";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TeamNavigationMode {
@@ -1140,6 +1141,8 @@ pub struct Workspace {
     /// Dropdown menu for the title-bar team-switcher pill.
     team_switcher_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_team_switcher_menu: bool,
+    swarm_detached_menu: ViewHandle<Menu<WorkspaceAction>>,
+    show_swarm_detached_menu: bool,
     theme_creator_modal: ViewHandle<ThemeCreatorModal>,
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
@@ -2736,6 +2739,10 @@ impl Workspace {
         toast_stack: ViewHandle<DismissibleToastStack<WorkspaceAction>>,
         ctx: &mut ViewContext<Self>,
     ) {
+        #[cfg(unix)]
+        ctx.subscribe_to_model(&crate::swarm::sessions::SwarmSessions::handle(ctx), |_, _, _, ctx| {
+            ctx.notify();
+        });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), move |_me, _, event, ctx| {
             match event {
                 WarpConfigUpdateEvent::TabConfigs => {
@@ -3534,6 +3541,8 @@ impl Workspace {
             show_header_toolbar_context_menu: None,
             team_switcher_menu: Self::build_team_switcher_menu(ctx),
             show_team_switcher_menu: false,
+            swarm_detached_menu: Self::build_swarm_detached_menu(ctx),
+            show_swarm_detached_menu: false,
             is_user_menu_open: false,
             tab_bar_pinned_by_popup: false,
             user_menu,
@@ -6316,6 +6325,48 @@ impl Workspace {
             }
         });
         menu
+    }
+
+    fn build_swarm_detached_menu(ctx: &mut ViewContext<Self>) -> ViewHandle<Menu<WorkspaceAction>> {
+        let menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.show_swarm_detached_menu = false;
+                ctx.notify();
+            }
+        });
+        menu
+    }
+
+    /// Lists detached sessions; picking one re-attaches it in a new tab. Sessions
+    /// started outside Swarm have no Warp shell integration and can't be shown as a
+    /// tab yet, so they're listed but disabled.
+    #[cfg(unix)]
+    fn show_swarm_detached_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+        let items: Vec<_> = sessions
+            .detached()
+            .map(|s| {
+                let what = s.foreground.clone().unwrap_or_else(|| "idle".to_string());
+                let cwd = s.cwd.clone().unwrap_or_default();
+                let label = format!("{}   {cwd}   {what}", s.display_name());
+                match crate::swarm::ReattachTab::for_session(s) {
+                    Some(tab) => MenuItemFields::new(label)
+                        .with_on_select_action(WorkspaceAction::SwarmReattach(tab))
+                        .into_item(),
+                    None => MenuItemFields::new(format!("{label}   (started outside Swarm)"))
+                        .with_disabled(true)
+                        .into_item(),
+                }
+            })
+            .collect();
+        if items.is_empty() {
+            return;
+        }
+        self.swarm_detached_menu.update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.show_swarm_detached_menu = true;
+        ctx.focus(&self.swarm_detached_menu);
+        ctx.notify();
     }
 
     fn build_team_switcher_menu(ctx: &mut ViewContext<Self>) -> ViewHandle<Menu<WorkspaceAction>> {
@@ -21121,6 +21172,63 @@ impl Workspace {
         Shrinkable::new(1.0, inner).finish()
     }
 
+    /// swarm-term: the active tab's title, centered in the title bar.
+    fn render_swarm_window_title(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
+        let theme = appearance.theme();
+        let title = self
+            .tabs
+            .get(self.active_tab_index)
+            .map(|tab| tab.pane_group.as_ref(ctx).display_title(ctx))
+            .unwrap_or_default();
+        Expanded::new(
+            1.,
+            Align::new(
+                Text::new_inline(title, appearance.ui_font_family(), 13.)
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .with_clip(ClipConfig::ellipsis())
+                    .finish(),
+            )
+            .finish(),
+        )
+        .finish()
+    }
+
+    /// swarm-term: right side of the title bar. "N detached" appears while
+    /// sessions are running with nothing attached.
+    #[cfg(unix)]
+    fn add_swarm_title_bar_controls(&self, row: &mut Flex, appearance: &Appearance, ctx: &AppContext) {
+        let count = crate::swarm::sessions::SwarmSessions::as_ref(ctx).detached().count();
+        if count == 0 {
+            return;
+        }
+        let theme = appearance.theme();
+        let text_color = theme.main_text_color(theme.background());
+        let font = appearance.ui_font_family();
+        let label = format!("{count} detached");
+        let button = Hoverable::new(self.mouse_states.swarm_detached_button.clone(), move |state| {
+            Container::new(
+                Text::new_inline(label.clone(), font, 12.)
+                    .with_color(text_color.into())
+                    .finish(),
+            )
+            .with_background(if state.is_hovered() {
+                internal_colors::fg_overlay_2(theme)
+            } else {
+                internal_colors::fg_overlay_1(theme)
+            })
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_padding_left(10.)
+            .with_padding_right(10.)
+            .with_padding_top(4.)
+            .with_padding_bottom(4.)
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmShowDetachedMenu))
+        .finish();
+        row.add_child(SavePosition::new(button, SWARM_DETACHED_BUTTON_POSITION_ID).finish());
+    }
+
     fn render_title_bar_search_bar(&self, appearance: &Appearance) -> Box<dyn Element> {
         let theme = appearance.theme();
         let text_color = theme.sub_text_color(theme.background());
@@ -21295,6 +21403,7 @@ impl Workspace {
             let left_toolbar_buttons = config
                 .left_items()
                 .into_iter()
+                .filter(|item| !crate::swarm::SWARM_CHROME || *item == HeaderToolbarItemKind::TabsPanel)
                 .filter_map(|item| self.render_header_toolbar_button(&item, appearance, ctx))
                 .collect::<Vec<_>>();
             let left_toolbar_button_count = left_toolbar_buttons.len();
@@ -21313,13 +21422,18 @@ impl Workspace {
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
 
-            self.add_configurable_right_side_tab_bar_controls(
-                &mut right_controls,
-                &config,
-                is_web_anonymous_user,
-                appearance,
-                ctx,
-            );
+            if crate::swarm::SWARM_CHROME {
+                #[cfg(unix)]
+                self.add_swarm_title_bar_controls(&mut right_controls, appearance, ctx);
+            } else {
+                self.add_configurable_right_side_tab_bar_controls(
+                    &mut right_controls,
+                    &config,
+                    is_web_anonymous_user,
+                    appearance,
+                    ctx,
+                );
+            }
 
             let left_padding = self.compute_tab_bar_left_padding(ctx);
 
@@ -21327,7 +21441,9 @@ impl Workspace {
             // an empty flexible slot keeps the right-side controls aligned to the right.
             let hide_search_bar =
                 *TabSettings::as_ref(ctx).hide_title_bar_search_bar_in_vertical_tabs;
-            let search_bar_slot = if hide_search_bar {
+            let search_bar_slot = if crate::swarm::SWARM_CHROME {
+                self.render_swarm_window_title(appearance, ctx)
+            } else if hide_search_bar {
                 Expanded::new(1., Empty::new().finish()).finish()
             } else {
                 Shrinkable::new(
@@ -25554,6 +25670,18 @@ impl TypedActionView for Workspace {
             OpenHeaderToolbarEditor => {
                 self.open_header_toolbar_editor(ctx);
             }
+            SwarmShowDetachedMenu => {
+                #[cfg(unix)]
+                self.show_swarm_detached_menu(ctx);
+            }
+            SwarmReattach(tab) => {
+                self.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
+                    Arc::new(HashMap::new()),
+                    None,
+                    ctx,
+                );
+            }
             ShowHeaderToolbarContextMenu { position } => {
                 self.show_header_toolbar_context_menu(*position, ctx);
             }
@@ -27161,6 +27289,19 @@ impl View for Workspace {
                     ParentOffsetBounds::WindowByPosition,
                     ParentAnchor::TopLeft,
                     ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
+        if self.show_swarm_detached_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.swarm_detached_menu).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    SWARM_DETACHED_BUTTON_POSITION_ID,
+                    vec2f(0., 4.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomRight,
+                    ChildAnchor::TopRight,
                 ),
             );
         }
