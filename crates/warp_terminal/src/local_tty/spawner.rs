@@ -16,6 +16,8 @@ use crate::local_tty::{self};
 
 #[derive(Clone, Copy, Debug)]
 pub enum PtySpawnMode {
+    /// swarm-term: the shell runs in a `swarmd` session.
+    Daemon,
     TerminalServer,
     FallbackToDirect,
     Direct,
@@ -38,6 +40,12 @@ pub trait PtyHandle: Send + Sync {
 
     /// Kills the pty process and waits for its successful termination.
     fn kill(&mut self) -> Result<()>;
+
+    /// Resizes a pty that isn't a local tty device. `None` means the caller
+    /// resizes the leader fd itself.
+    fn resize(&self, _size: &crate::SizeInfo) -> Option<Result<()>> {
+        None
+    }
 }
 
 /// A handle for a pty that is a direct child of the current process.
@@ -133,6 +141,9 @@ pub(super) struct PtySpawnInfo {
 pub struct PtySpawner {
     #[cfg(unix)]
     server: Option<TerminalServer>,
+    /// swarm-term: when set, shells are created as `swarmd` sessions.
+    #[cfg(unix)]
+    daemon: Option<super::daemon::DaemonSpawner>,
 }
 
 impl PtySpawner {
@@ -145,8 +156,22 @@ impl PtySpawner {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
                 let server = super::server::TerminalServer::new()?;
+                // Created after the terminal server so its fork doesn't
+                // inherit the daemon client's threads.
+                let daemon = if super::daemon::enabled() {
+                    match super::daemon::DaemonSpawner::new() {
+                        Ok(d) => Some(d),
+                        Err(e) => {
+                            log::warn!("swarm: daemon spawner unavailable: {e:#}");
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
                 Ok(Self {
                     server: Some(server),
+                    daemon,
                 })
             } else if #[cfg(target_os = "windows")] {
                 Ok(Self {})
@@ -160,7 +185,7 @@ impl PtySpawner {
     pub fn new_for_test() -> Self {
         cfg_if::cfg_if! {
             if #[cfg(unix)] {
-                Self{ server: None }
+                Self{ server: None, daemon: None }
             } else if #[cfg(target_os = "windows")] {
                 Self {}
             } else {
@@ -190,6 +215,17 @@ impl PtySpawner {
         #[cfg(windows)] event_loop_tx: super::mio_channel::Sender<crate::writeable_pty::Message>,
         ctx: &mut AppContext,
     ) -> Result<(PtySpawnResult, Box<dyn PtyHandle>)> {
+        #[cfg(unix)]
+        if let Some(daemon) = &self.daemon {
+            match daemon.spawn(options.clone()) {
+                Ok(result) => {
+                    hooks.spawned(PtySpawnMode::Daemon, ctx);
+                    return Ok(result);
+                }
+                Err(err) => log::warn!("swarm: starting a local shell instead of a daemon session: {err:#}"),
+            }
+        }
+
         #[cfg(not(unix))]
         let is_fallback = false;
         #[cfg(unix)]

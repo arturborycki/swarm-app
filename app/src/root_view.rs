@@ -1934,7 +1934,9 @@ impl RootView {
                     AuthOnboardingState::WebImport(AuthOnboardingTarget::Workspace(workspace_args.into()))
                 } else {
 
-                    if FeatureFlag::ForceLogin.is_enabled() {
+                    if crate::swarm::SKIP_WARP_ONBOARDING {
+                        AuthOnboardingState::Terminal(workspace_args.create_workspace(ctx))
+                    } else if FeatureFlag::ForceLogin.is_enabled() {
                         // ForceLogin is true for Preview
                         AuthOnboardingState::Auth(workspace_args.into())
                     } else if FeatureFlag::AgentOnboarding.is_enabled()

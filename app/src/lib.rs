@@ -6,6 +6,7 @@ mod antivirus;
 #[cfg(target_os = "macos")]
 mod app_menus;
 mod app_services;
+pub(crate) mod swarm;
 mod app_state;
 mod auth;
 mod autoupdate;

@@ -272,7 +272,7 @@ pub(super) fn spawn(options: PtyOptions) -> Result<PtySpawnInfo> {
 /// Does not perform any PTY-level setup; hand the returned `Command`
 /// to [`spawn_command_in_pty`].
 #[allow(clippy::too_many_arguments)]
-fn build_host_shell_command(
+pub(super) fn build_host_shell_command(
     shell_starter: DirectShellStarter,
     window_id: Option<usize>,
     env_vars: HashMap<OsString, OsString>,
@@ -715,6 +715,10 @@ impl EventedPty for Pty {
     }
 
     fn on_resize(&mut self, size: &SizeInfo) {
+        if let Some(result) = self.pty_handle.resize(size) {
+            report_if_error!(result);
+            return;
+        }
         let win = size.to_winsize();
 
         let res = unsafe { libc::ioctl(self.fd.as_raw_fd(), libc::TIOCSWINSZ, &win as *const _) };

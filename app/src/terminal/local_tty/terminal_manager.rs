@@ -98,7 +98,7 @@ impl PtySpawnHooks for AppPtySpawnHooks {
 
     fn spawned(&self, mode: PtySpawnMode, ctx: &mut AppContext) {
         let mode = match mode {
-            PtySpawnMode::TerminalServer => TelemetryPtySpawnMode::TerminalServer,
+            PtySpawnMode::Daemon | PtySpawnMode::TerminalServer => TelemetryPtySpawnMode::TerminalServer,
             PtySpawnMode::FallbackToDirect => TelemetryPtySpawnMode::FallbackToDirect,
             PtySpawnMode::Direct => TelemetryPtySpawnMode::Direct,
         };

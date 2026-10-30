@@ -89,6 +89,9 @@ nix = { workspace = true, features = [
     "mman",
 ] }
 signal-hook = "0.3.17"
+# swarm-term: sessions owned by the swarmd daemon (see local_tty/daemon.rs).
+swarm-client = { path = "../../../crates/swarm-client" }
+tokio = { workspace = true, features = ["rt-multi-thread", "net", "io-util", "sync", "time", "macros"] }
 signal-hook-mio = { version = "0.2.4", features = ["support-v1_0"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]

@@ -3,6 +3,8 @@
 
 //! TTY related functionality.
 
+#[cfg(unix)]
+pub mod daemon;
 pub mod docker_sandbox;
 pub mod event_loop;
 pub mod mio_channel;
