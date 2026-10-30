@@ -68,6 +68,8 @@ impl DebugSettings {
         // We only want to show memory stats in dogfood and not in tests.
         *self.show_memory_stats.value()
             && warp_core::channel::ChannelState::enable_debug_features()
+            // swarm-term: Swarm's test builds are debug builds; keep blocks clean.
+            && !crate::swarm::SWARM_CHROME
             && !cfg!(test)
     }
 }

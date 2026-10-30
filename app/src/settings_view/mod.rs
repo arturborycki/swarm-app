@@ -1457,11 +1457,24 @@ impl SettingsView {
             );
         }
 
+        // swarm-term: only the settings for what Swarm itself does; Warp's
+        // account, AI, cloud, team, referral and Drive pages are left out.
+        if crate::swarm::SWARM_CHROME {
+            nav_items.retain(|item| matches!(item, SettingsNavItem::Page(section) if crate::swarm::shows_settings_section(*section)));
+            let about = nav_items.len().saturating_sub(1);
+            nav_items.insert(about, SettingsNavItem::Page(SettingsSection::EditorAndCodeReview));
+        }
+
         let initial_page = match page {
             Some(SettingsSection::Scripting) if !FeatureFlag::WarpControlCli.is_enabled() => {
                 SettingsSection::Account
             }
             other => other.unwrap_or_default(),
+        };
+        let initial_page = if crate::swarm::SWARM_CHROME && !crate::swarm::shows_settings_section(initial_page) {
+            SettingsSection::Appearance
+        } else {
+            initial_page
         };
 
         // Auto-expand the umbrella if the initial page is one of its subpages.
@@ -2043,6 +2056,11 @@ impl SettingsView {
         allow_steal_focus: bool,
         ctx: &mut ViewContext<Self>,
     ) {
+        let section = if crate::swarm::SWARM_CHROME && !crate::swarm::shows_settings_section(section) {
+            SettingsSection::Appearance
+        } else {
+            section
+        };
         // Every nav target owns its backing page. Check it exists.
         if self.settings_page(section).is_none() {
             return;

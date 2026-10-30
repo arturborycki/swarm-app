@@ -1260,9 +1260,10 @@ pub fn init(app: &mut AppContext) {
         .with_context_predicate(id!("Workspace") & id!(flags::ENABLE_WARP_DRIVE))]);
     }
 
-    // Oz and Warp Control CLI install/uninstall actions (macOS only)
+    // Oz and Warp Control CLI install/uninstall actions (macOS only). Oz is
+    // Warp's cloud agent CLI, not part of Swarm.
     #[cfg(target_os = "macos")]
-    {
+    if !crate::swarm::SWARM_CHROME {
         app.register_editable_bindings([
             EditableBinding::new(
                 "workspace:install_cli",

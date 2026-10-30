@@ -227,7 +227,7 @@ pub fn init_actions_from_parent_view<T: Action + Clone>(
                 .is_supported_on_current_platform(),
         ),
         ToggleSettingActionPair::new(
-            "warp completions",
+            "swarm completions",
             builder(SettingsAction::FeaturesPageToggle(
                 FeaturesPageAction::ToggleWarpCompletions,
             )),
@@ -5116,7 +5116,7 @@ impl SettingsWidget for DefaultTerminalWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "warp default terminal application"
+        "swarm default terminal application"
     }
 
     fn render(
@@ -5963,7 +5963,7 @@ impl SettingsWidget for WarpCompletionsWidget {
     type View = FeaturesPageView;
 
     fn search_terms(&self) -> &str {
-        "warp completions built-in shell command suggestions open completions menu as you type typing"
+        "swarm completions built-in shell command suggestions open completions menu as you type typing"
     }
 
     fn render(

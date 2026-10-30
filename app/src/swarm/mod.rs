@@ -70,6 +70,13 @@ pub fn claim_remote_tab_reopen() -> bool {
     !REMOTE_TABS_CLAIMED.swap(true, std::sync::atomic::Ordering::SeqCst)
 }
 
+/// Settings pages for what Swarm itself does (no Warp account, AI, cloud,
+/// teams, referrals or Drive).
+pub fn shows_settings_section(section: crate::settings_view::SettingsSection) -> bool {
+    use crate::settings_view::SettingsSection::*;
+    matches!(section, Appearance | Features | Keybindings | Warpify | EditorAndCodeReview | Privacy | About)
+}
+
 /// Whether shells live in `swarmd` sessions. Then Warp's own window/tab
 /// restore is off: the daemon's sessions are the tabs to bring back.
 pub fn use_daemon_sessions() -> bool {
