@@ -172,7 +172,7 @@ pub const THEME: StaticCommand = StaticCommand {
 
 pub const EXIT: StaticCommand = StaticCommand {
     name: "/exit",
-    description: "Exit Warp",
+    description: "Exit Swarm",
     kind: SlashCommandKind::Exit,
     supported_surfaces: SlashCommandSurfaces::TuiOnly,
     availability: Availability::ALWAYS,
@@ -294,7 +294,7 @@ pub const ADD_RULE: StaticCommand = StaticCommand {
 
 pub static EDIT: LazyLock<StaticCommand> = LazyLock::new(|| StaticCommand {
     name: "/open-file",
-    description: "Open a file in Warp's code editor",
+    description: "Open a file in Swarm's code editor",
     kind: SlashCommandKind::Edit,
     supported_surfaces: SlashCommandSurfaces::GuiOnly {
         icon_path: "bundled/svg/file-code-02.svg",

@@ -4128,7 +4128,7 @@ impl VoiceWidget {
 
         let voice_input_description_text_fragments = vec![
             FormattedTextFragment::plain_text(
-                "Voice input allows you to control Warp by speaking directly to your terminal (powered by ",
+                "Voice input allows you to control Swarm by speaking directly to your terminal (powered by ",
             ),
             FormattedTextFragment::hyperlink("Wispr Flow", WISPR_FLOW_URL),
             FormattedTextFragment::plain_text(")."),

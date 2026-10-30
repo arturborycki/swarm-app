@@ -842,7 +842,7 @@ impl NotificationsTrigger {
     pub fn discovery_banner_copy(&self) -> &'static str {
         match self {
             NotificationsTrigger::LongRunningCommand(..) => {
-                "Warp can notify you when long-running commands finish."
+                "Swarm can notify you when long-running commands finish."
             }
             NotificationsTrigger::AgentTaskCompleted(..) => {
                 "Warp can notify you when an agent finishes responding."
@@ -851,7 +851,7 @@ impl NotificationsTrigger {
                 "Warp can notify you when a command or agent needs your attention."
             }
             NotificationsTrigger::PasswordPrompt => {
-                "Warp can notify you when you're prompted to enter a password."
+                "Swarm can notify you when you're prompted to enter a password."
             }
         }
     }
@@ -4016,7 +4016,7 @@ impl TerminalView {
         let incompatible_configuration_banner = ctx.add_typed_action_view(|_| {
             Banner::new(BannerTextContent::formatted_text(vec![
                 FormattedTextFragment::plain_text(
-                    "Your shell configuration is incompatible with Warp...  ",
+                    "Your shell configuration is incompatible with Swarm...  ",
                 ),
                 FormattedTextFragment::hyperlink("More info", KNOWN_ISSUES_URL),
             ]))
@@ -10561,11 +10561,11 @@ impl TerminalView {
 
         let a11y_message = match &warpify_keybinding {
             Some(keystroke) => format!(
-                "You can press {} to Warpify this {} for more Warp features.",
+                "You can press {} to Warpify this {} for more Swarm features.",
                 keystroke.displayed(),
                 lowercase_title
             ),
-            None => format!("You can Warpify this {lowercase_title} for more Warp features."),
+            None => format!("You can Warpify this {lowercase_title} for more Swarm features."),
         };
 
         model
@@ -10723,7 +10723,7 @@ impl TerminalView {
 
         let a11y_content = AccessibilityContent::new(
             banner_title,
-            "Make sure you have enabled access for Warp notifications in System Preferences.",
+            "Make sure you have enabled access for Swarm notifications in System Preferences.",
             WarpA11yRole::TextRole,
         );
         ctx.emit_a11y_content(a11y_content);
@@ -14648,7 +14648,7 @@ impl TerminalView {
 
         // Now that the session is bootstrapped, update any restored AI blocks that were
         // created before bootstrapping with the shell launch data. This enables file link
-        // detection and the "Open in Warp" button on code blocks in restored conversations.
+        // detection and the "Open in Swarm" button on code blocks in restored conversations.
         if let Some(shell_launch_data) = self.active_session.as_ref(ctx).shell_launch_data(ctx) {
             let ai_block_handles: Vec<_> = self
                 .rich_content_views
@@ -17636,7 +17636,7 @@ impl TerminalView {
 
                             if renders_in_warp_notebook_viewer(&path) {
                                 items.push(
-                                    MenuItemFields::new("Open in Warp")
+                                    MenuItemFields::new("Open in Swarm")
                                         .with_on_select_action(TerminalAction::OpenFileInWarp(path))
                                         .into_item(),
                                 );

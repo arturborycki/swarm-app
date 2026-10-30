@@ -15,7 +15,7 @@ define_settings_group!(GeneralSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.show_warning_before_quitting",
-        description: "Whether to show a warning dialog before quitting Warp.",
+        description: "Whether to show a warning dialog before quitting Swarm.",
     },
     quit_on_last_window_closed: QuitOnLastWindowClosed {
         type: bool,
@@ -25,7 +25,7 @@ define_settings_group!(GeneralSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.quit_on_last_window_closed",
-        description: "Whether to quit Warp when the last window is closed.",
+        description: "Whether to quit Swarm when the last window is closed.",
     },
     restore_session: RestoreSession {
         type: bool,
@@ -35,7 +35,7 @@ define_settings_group!(GeneralSettings, settings: [
         surface: settings::SettingSurfaces::GUI,
         private: false,
         toml_path: "general.restore_session",
-        description: "Whether to restore the previous session when Warp starts up.",
+        description: "Whether to restore the previous session when Swarm starts up.",
     },
     add_app_as_login_item: LoginItem {
         type: bool,

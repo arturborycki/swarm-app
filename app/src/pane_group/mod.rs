@@ -3100,7 +3100,7 @@ impl PaneGroup {
             Banner::<PaneGroupAction>::new_permanently_dismissible(
                 BannerTextContent::formatted_text(vec![
                     FormattedTextFragment::plain_text(
-                        "Warp doesn't currently support your default shell, falling back to zsh.  ",
+                        "Swarm doesn't currently support your default shell, falling back to zsh.  ",
                     ),
                     FormattedTextFragment::hyperlink("Learn more", WARP_SHELL_COMPATIBILITY_DOCS),
                 ]),
@@ -5250,8 +5250,26 @@ impl PaneGroup {
             .unwrap_or_default()
     }
 
+    /// swarm-term: a tab's title is its sessions' name in the daemon, so it
+    /// shows wherever the session is listed and survives reattaching.
+    fn name_daemon_sessions(&self, name: Option<String>, ctx: &AppContext) {
+        #[cfg(unix)]
+        {
+            let warp_session_ids = self
+                .terminal_views(ctx)
+                .into_iter()
+                .filter_map(|view| view.as_ref(ctx).active_block_session_id())
+                .map(|id| id.as_u64())
+                .collect();
+            warp_terminal::local_tty::daemon::name_sessions(warp_session_ids, name);
+        }
+        #[cfg(not(unix))]
+        let _ = (name, ctx);
+    }
+
     pub fn set_title(&mut self, title: &str, ctx: &mut ViewContext<Self>) {
         self.custom_title = Some(title.to_string()).filter(|t| !t.is_empty());
+        self.name_daemon_sessions(self.custom_title.clone(), ctx);
 
         // refocus on the focused pane
         if let Some(pane) = self.focused_pane_content(ctx) {
@@ -5261,6 +5279,7 @@ impl PaneGroup {
 
     pub fn clear_title(&mut self, ctx: &mut ViewContext<Self>) {
         self.custom_title = None;
+        self.name_daemon_sessions(None, ctx);
 
         // refocus on the focused pane
         if let Some(pane) = self.focused_pane_content(ctx) {

@@ -589,9 +589,9 @@ const TAB_BAR_ICON_PADDING: f32 = 4.;
 
 const TAB_BAR_PILL_WIDTH: f32 = 100.;
 const PILL_FONT_SIZE: f32 = 12.;
-// We use the word "Warp" in the Update Ready button to make it obvious that the terminal is Warp.
+// We use the word "Swarm" in the Update Ready button to make it obvious that the terminal is Warp.
 // This can lead to free advertising when users screen-share Warp when an update is available.
-const UPDATE_READY_TEXT: &str = "Update Warp";
+const UPDATE_READY_TEXT: &str = "Update Swarm";
 
 const TAB_BAR_OVERFLOW_MENU_WIDTH: f32 = 300.;
 
@@ -644,7 +644,7 @@ const AI_ASSISTANT_BUTTON_ID: &str = "workspace_view:ai_assistant_button";
 
 const VERSION_DEPRECATION_BANNER_TEXT: &str = "Your app is out of date and some features may not work as expected. Please update immediately.";
 
-const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some Warp features may not work as expected without updating immediately, but Warp is unable to perform the update.";
+const VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT: &str = "Some Swarm features may not work as expected without updating immediately, but Swarm is unable to perform the update.";
 
 const ASK_AI_ASSISTANT_KEYBINDING_NAME: &str = "workspace:toggle_ai_assistant";
 const TOGGLE_RESOURCE_CENTER_KEYBINDING_NAME: &str = "workspace:toggle_resource_center";
@@ -4103,7 +4103,7 @@ impl Workspace {
                         self.add_tab_with_pane_layout(
                             PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
                             Arc::new(HashMap::new()),
-                            None,
+                            tab.name.clone(),
                             ctx,
                         );
                     }
@@ -8289,7 +8289,7 @@ impl Workspace {
     }
 
     /// The tab bar overflow menu is the context menu that appears when
-    /// a user clicks "Update Warp" in the top right of the tab bar.
+    /// a user clicks "Update Swarm" in the top right of the tab bar.
     pub fn toggle_tab_bar_overflow_menu(&mut self, ctx: &mut ViewContext<Self>) {
         if self.show_tab_bar_overflow_menu {
             self.close_tab_bar_overflow_menu(ctx);
@@ -8319,7 +8319,7 @@ impl Workspace {
                         .into_item(),
                 ),
                 AutoupdateStage::UnableToUpdateToNewVersion { .. } => menu_items.push(
-                    MenuItemFields::new("Update Warp manually")
+                    MenuItemFields::new("Update Swarm manually")
                         .with_on_select_action(WorkspaceAction::DownloadNewVersion)
                         .into_item(),
                 ),
@@ -10086,7 +10086,7 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update and relaunch Warp")
+                        MenuItemFields::new("Update and relaunch Swarm")
                             .with_on_select_action(WorkspaceAction::ApplyUpdate)
                             .with_override_text_color(appearance.theme().ansi_fg_red())
                             .into_item(),
@@ -10109,7 +10109,7 @@ impl Workspace {
                     ) =>
                 {
                     items.push(
-                        MenuItemFields::new("Update Warp manually")
+                        MenuItemFields::new("Update Swarm manually")
                             .with_on_select_action(WorkspaceAction::DownloadNewVersion)
                             .with_override_text_color(appearance.theme().ansi_fg_red())
                             .into_item(),
@@ -10140,7 +10140,7 @@ impl Workspace {
 
         #[cfg(not(target_family = "wasm"))]
         items.push(
-            MenuItemFields::new("View Warp logs")
+            MenuItemFields::new("View Swarm logs")
                 .with_on_select_action(WorkspaceAction::ViewLogs)
                 .into_item(),
         );
@@ -14742,7 +14742,7 @@ impl Workspace {
                         let url = NOTIFICATIONS_TROUBLESHOOT_URL.to_string();
                         view.toast_stack.update(ctx, |toast_stack, ctx| {
                             let toast = DismissibleToast::error(
-                                "Warp doesn't have permission to send desktop notifications."
+                                "Swarm doesn't have permission to send desktop notifications."
                                     .to_string(),
                             )
                             .with_link(
@@ -15411,7 +15411,7 @@ impl Workspace {
                                 link = link.with_keystroke(keystroke);
                             }
 
-                            let toast = DismissibleToast::default(String::from("Warp updated!"))
+                            let toast = DismissibleToast::default(String::from("Swarm updated!"))
                                 .with_link(link);
 
                             stack.add_ephemeral_toast(toast, ctx);
@@ -21340,7 +21340,7 @@ impl Workspace {
             .finish();
             tab_bar.add_child(warp_logo);
 
-            // Right: Info button + "View all cloud runs" button (for ambient agent sessions) + "Open in Warp" button
+            // Right: Info button + "View all cloud runs" button (for ambient agent sessions) + "Open in Swarm" button
             let mut right_row = Flex::row()
                 .with_cross_axis_alignment(CrossAxisAlignment::Center)
                 .with_main_axis_size(MainAxisSize::Min);
@@ -21380,7 +21380,7 @@ impl Workspace {
                 }
             }
 
-            // Hide "Open in Warp" button on mobile devices
+            // Hide "Open in Swarm" button on mobile devices
             if !warpui::platform::wasm::is_mobile_device() {
                 right_row.add_child(ChildView::new(&self.open_in_warp_button).finish());
             }
@@ -22676,7 +22676,7 @@ impl Workspace {
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
                             VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
                         } else {
-                            "A new version is available but Warp is unable to perform the update."
+                            "A new version is available but Swarm is unable to perform the update."
                                 .to_owned()
                         };
 
@@ -22687,7 +22687,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: "Update Swarm manually".to_string(),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -22702,7 +22702,7 @@ impl Workspace {
                         if is_incoming_version_past_current(new_version.soft_cutoff.as_deref()) {
                             VERSION_DEPRECATION_WITHOUT_PERMISSIONS_BANNER_TEXT.to_owned()
                         } else {
-                            "Warp was unable to launch the new installed version.".to_owned()
+                            "Swarm was unable to launch the new installed version.".to_owned()
                         };
 
                     Some(WorkspaceBannerFields {
@@ -22712,7 +22712,7 @@ impl Workspace {
                         description,
                         secondary_button: None,
                         button: Some(WorkspaceBannerButtonDetails {
-                            text: "Update Warp manually".to_string(),
+                            text: "Update Swarm manually".to_string(),
                             action: WorkspaceAction::DownloadNewVersion,
                             variant: BannerButtonVariant::Outlined,
                             icon: None,
@@ -24266,7 +24266,7 @@ impl Workspace {
             // Many users' browser settings will block Local Network Access so this will end up redirecting to download page,
             // even if they have the app installed.
             let toast_message = format!(
-                "Have Warp installed but redirecting to download page?\nEnable Local Network Access for {} in your browser.",
+                "Have Swarm installed but redirecting to download page?\nEnable Local Network Access for {} in your browser.",
                 ChannelState::server_root_url()
             );
             self.toast_stack.update(ctx, |toast_stack, ctx| {
@@ -25687,7 +25687,7 @@ impl TypedActionView for Workspace {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
                     Arc::new(HashMap::new()),
-                    None,
+                    tab.name.clone(),
                     ctx,
                 );
             }

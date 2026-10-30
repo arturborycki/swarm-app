@@ -887,7 +887,7 @@ impl VersionInfoWidget {
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: "Relaunch Swarm",
                             action: MainPageAction::Relaunch,
                         }),
                     ),
@@ -904,28 +904,28 @@ impl VersionInfoWidget {
                             color: faded_text_color,
                         }),
                         Some(CallToActionContent {
-                            text: "Relaunch Warp",
+                            text: "Relaunch Swarm",
                             action: MainPageAction::Relaunch,
                         }),
                     ),
                     AutoupdateStage::UnableToUpdateToNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is available but can't be installed",
+                            text: "A new version of Swarm is available but can't be installed",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: "Update Swarm manually",
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),
                     ),
                     AutoupdateStage::UnableToLaunchNewVersion { .. } => (
                         Some(StatusContent {
-                            text: "A new version of Warp is installed but can't be launched.",
+                            text: "A new version of Swarm is installed but can't be launched.",
                             color: ansi_red,
                         }),
                         Some(CallToActionContent {
-                            text: "Update Warp manually",
+                            text: "Update Swarm manually",
                             // note: the handler for this action is a no-op
                             action: MainPageAction::DownloadUpdate,
                         }),

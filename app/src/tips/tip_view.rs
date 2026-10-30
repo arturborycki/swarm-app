@@ -151,7 +151,7 @@ impl TipsView {
             ),
             TipItem::new(
                 "Theme Picker".to_string(),
-                "Make Warp your own by choosing a built-in theme. Or create your own.".to_string(),
+                "Make Swarm your own by choosing a built-in theme. Or create your own.".to_string(),
                 TipAction::ThemePicker,
                 ctx,
             ),

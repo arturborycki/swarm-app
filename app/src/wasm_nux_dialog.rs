@@ -169,7 +169,7 @@ impl View for WasmNUXDialog {
                 dialog_styles,
             )
             .with_bottom_row_child(Self::render_dialog_button(
-                "Open in Warp",
+                "Open in Swarm",
                 WasmNUXDialogAction::OpenNativeAndClose,
                 &self.confirm_mouse_state,
                 appearance,
@@ -230,7 +230,7 @@ impl View for WasmNUXDialog {
             let object_kind = match web_intent_parser::current_web_intent() {
                 Some(WebIntent::DriveObject(_)) => "Warp Drive objects",
                 Some(WebIntent::SessionView(_)) => "shared sessions",
-                _ => "Warp links",
+                _ => "Swarm links",
             };
 
             Dialog::new(

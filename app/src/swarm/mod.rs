@@ -26,6 +26,8 @@ pub struct ReattachTab {
     pub warp_session_id: Option<u64>,
     /// For an idle shell without it: the shell to set Warp's integration up in.
     pub warpify_shell: Option<String>,
+    /// The session's name, shown as the tab title.
+    pub name: Option<String>,
 }
 
 #[cfg(unix)]
@@ -43,7 +45,7 @@ impl ReattachTab {
         let warpify_shell = program
             .filter(|p| matches!(p.as_str(), "zsh" | "bash" | "fish"))
             .filter(|_| warp_session_id.is_none() && session.foreground.is_none());
-        ReattachTab { session_id: session.id.clone(), warp_session_id, warpify_shell }
+        ReattachTab { session_id: session.id.clone(), warp_session_id, warpify_shell, name: session.name.clone() }
     }
 
     /// Whether the tab will show Warp blocks (otherwise it shows raw output).

@@ -234,7 +234,7 @@ where
         .finish()
 }
 
-/// Returns whether "Open in Warp" should be offered for the given file path.
+/// Returns whether "Open in Swarm" should be offered for the given file path.
 ///
 /// This checks:
 /// - Whether Warp is already the default editor (skip if so)

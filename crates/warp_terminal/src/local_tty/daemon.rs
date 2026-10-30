@@ -141,25 +141,36 @@ async fn watch_once(on_change: &impl Fn(Vec<DaemonSession>) -> bool) -> Result<b
 /// Marks the daemon sessions behind these Warp session ids as not reopening
 /// (`auto_attach=false`), in the background: the user closed their tabs.
 pub fn forget_sessions(warp_session_ids: Vec<u64>) {
+    let mut ui = BTreeMap::new();
+    ui.insert(META_AUTO_ATTACH.to_string(), "false".to_string());
+    update_sessions(warp_session_ids, swarm_client::swarm_proto::MetaUpdate { name: None, ui });
+}
+
+/// Names (or, with `None`, un-names) the daemon sessions behind these Warp
+/// session ids, in the background: the user renamed their tab.
+pub fn name_sessions(warp_session_ids: Vec<u64>, name: Option<String>) {
+    let update = swarm_client::swarm_proto::MetaUpdate { name: Some(name), ui: BTreeMap::new() };
+    update_sessions(warp_session_ids, update);
+}
+
+fn update_sessions(warp_session_ids: Vec<u64>, update: swarm_client::swarm_proto::MetaUpdate) {
     if warp_session_ids.is_empty() || !enabled() {
         return;
     }
-    let spawned = std::thread::Builder::new().name("swarm-forget".into()).spawn(move || {
+    let spawned = std::thread::Builder::new().name("swarm-meta".into()).spawn(move || {
         let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
         let result = rt.block_on(async {
             let client = Client::connect_local("warp").await?;
             for session in client.list().await? {
                 let id = session.ui.get(META_SESSION_ID).and_then(|v| v.parse::<u64>().ok());
                 if id.is_some_and(|id| warp_session_ids.contains(&id)) {
-                    let mut ui = BTreeMap::new();
-                    ui.insert(META_AUTO_ATTACH.to_string(), "false".to_string());
-                    client.set_meta(&session.id, swarm_client::swarm_proto::MetaUpdate { name: None, ui }).await?;
+                    client.set_meta(&session.id, update.clone()).await?;
                 }
             }
             anyhow::Ok(())
         });
         if let Err(e) = result {
-            log::warn!("swarm: couldn't mark closed sessions: {e:#}");
+            log::warn!("swarm: couldn't update sessions: {e:#}");
         }
     });
     if let Err(e) = spawned {

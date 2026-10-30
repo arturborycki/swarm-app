@@ -301,7 +301,7 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
     ];
     let group_5 = vec![
         MenuItem::Custom(CustomMenuItem::new(
-            "Use Warp's Prompt",
+            "Use Swarm's Prompt",
             move |ctx| ctx.dispatch_global_action("app:toggle_user_ps1", &()),
             move |_props, ctx| MenuItemPropertyChanges {
                 checked: Some(
@@ -930,7 +930,7 @@ fn make_new_help_menu() -> Menu {
         "Help",
         vec![
             feedback_menu_item(),
-            link_menu_item("Warp Documentation...", links::USER_DOCS_URL.into()),
+            link_menu_item("Swarm Documentation...", links::USER_DOCS_URL.into()),
             link_menu_item("GitHub Issues...", links::GITHUB_ISSUES_URL.into()),
             link_menu_item("Join our Slack community...", links::SLACK_URL.into()),
         ],

@@ -294,8 +294,8 @@ static PLUGIN_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> =
 
 static NATIVE_INSTALL_INSTRUCTIONS: LazyLock<PluginInstructions> = LazyLock::new(|| {
     PluginInstructions {
-        title: "Enable Warp Notifications for Codex",
-        subtitle: "Update Codex to the latest version, then enable in-focus notifications so Warp can display them while you work.",
+        title: "Enable Swarm Notifications for Codex",
+        subtitle: "Update Codex to the latest version, then enable in-focus notifications so Swarm can display them while you work.",
         steps: &[
             PluginInstructionStep {
                 description: "Update Codex to the latest version.",
