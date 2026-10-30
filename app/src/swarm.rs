@@ -5,6 +5,9 @@
 //! `docs/DESIGN.md` §9b in the swarm-term repo). Fork-specific switches live
 //! here so the diff against upstream stays easy to find.
 
+/// The product name shown in menus and titles.
+pub const APP_NAME: &str = "Swarm";
+
 /// Swarm opens straight into a terminal: no Warp welcome, onboarding or login
 /// screen. Warp's cloud sign-in stays available but opt-in.
 pub const SKIP_WARP_ONBOARDING: bool = true;

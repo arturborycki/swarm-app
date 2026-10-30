@@ -23,6 +23,11 @@ path = "src/bin/oss.rs"
 test = false
 
 [[bin]]
+name = "swarm"
+path = "src/bin/swarm.rs"
+test = false
+
+[[bin]]
 name = "warp"
 path = "src/bin/local.rs"
 test = false
@@ -1040,6 +1045,15 @@ history_search_ranking_v2 = []
 stored_screenshots = []
 cloud_agent_shell_respawn = []
 acp_harness = []
+
+[package.metadata.bundle.bin.swarm]
+category = "public.app-category.developer-tools"
+copyright = "© 2026 swarm-term contributors; built on Warp (AGPL-3.0)"
+identifier = "dev.swarm.Swarm"
+name = "Swarm"
+resources = ["assets/onboarding"]
+icon = ["channels/swarm/icon/512x512.png", "channels/swarm/icon/512x512@2x.png"]
+short_description = "A terminal whose sessions keep running: local and remote, always reattachable."
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"
