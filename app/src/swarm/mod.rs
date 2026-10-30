@@ -28,6 +28,8 @@ pub struct ReattachTab {
     pub warpify_shell: Option<String>,
     /// The session's name, shown as the tab title.
     pub name: Option<String>,
+    /// The ssh host alias the session lives on; `None` for this Mac.
+    pub host: Option<String>,
 }
 
 #[cfg(unix)]
@@ -35,7 +37,7 @@ impl ReattachTab {
     /// The tab for a daemon session. Sessions this app started already have
     /// Warp's integration; an idle zsh, bash or fish started elsewhere gets it
     /// set up; anything else (a running program) opens without it.
-    pub fn for_session(session: &warp_terminal::local_tty::daemon::DaemonSession) -> Self {
+    pub fn for_session(host: Option<&str>, session: &warp_terminal::local_tty::daemon::DaemonSession) -> Self {
         use warp_terminal::local_tty::daemon::META_SESSION_ID;
         let warp_session_id = session.ui.get(META_SESSION_ID).and_then(|v| v.parse().ok());
         let program = session
@@ -45,7 +47,13 @@ impl ReattachTab {
         let warpify_shell = program
             .filter(|p| matches!(p.as_str(), "zsh" | "bash" | "fish"))
             .filter(|_| warp_session_id.is_none() && session.foreground.is_none());
-        ReattachTab { session_id: session.id.clone(), warp_session_id, warpify_shell, name: session.name.clone() }
+        ReattachTab {
+            session_id: session.id.clone(),
+            warp_session_id,
+            warpify_shell,
+            name: session.name.clone(),
+            host: host.map(str::to_string),
+        }
     }
 
     /// Whether the tab will show Warp blocks (otherwise it shows raw output).
@@ -68,7 +76,7 @@ pub fn reattachable_tabs() -> Vec<ReattachTab> {
     #[cfg(unix)]
     return warp_terminal::local_tty::daemon::reattachable_sessions()
         .into_iter()
-        .map(|s| ReattachTab::for_session(&s))
+        .map(|s| ReattachTab::for_session(None, &s))
         .collect();
     #[cfg(not(unix))]
     Vec::new()
@@ -88,6 +96,9 @@ pub fn reattach_terminal_options(tab: &ReattachTab) -> crate::pane_group::NewTer
         }
         if let Some(shell) = &tab.warpify_shell {
             options.env_vars.insert(REATTACH_WARPIFY_SHELL_ENV.into(), shell.clone().into());
+        }
+        if let Some(host) = &tab.host {
+            options.env_vars.insert(warp_terminal::local_tty::daemon::REATTACH_HOST_ENV.into(), host.clone().into());
         }
     }
     options

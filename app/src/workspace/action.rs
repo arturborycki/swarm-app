@@ -131,6 +131,12 @@ pub enum WorkspaceAction {
     SwarmShowDetachedMenu,
     /// swarm-term: open a tab attached to a running daemon session.
     SwarmReattach(crate::swarm::ReattachTab),
+    /// swarm-term: list ssh hosts to connect to.
+    SwarmShowHostsMenu,
+    /// swarm-term: connect to a host's daemon and list its sessions.
+    SwarmConnectHost(String),
+    /// swarm-term: start a session on a host (`None`: this Mac) and open it.
+    SwarmNewSession { host: Option<String> },
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1133,6 +1139,9 @@ impl WorkspaceAction {
             | ShowHeaderToolbarContextMenu { .. }
             | SwarmShowDetachedMenu
             | SwarmReattach(_)
+            | SwarmShowHostsMenu
+            | SwarmConnectHost(_)
+            | SwarmNewSession { .. }
             | Reauth
             | SignupAnonymousUser
             | LogOut

@@ -59,9 +59,11 @@ impl HeaderToolbarItemKind {
     /// Does not check user show/hide preferences — use `is_available` for that.
     pub fn is_supported(&self, app: &AppContext) -> bool {
         match self {
+            // swarm-term: the sidebar toggle stays in tab mode too; it brings the
+            // sessions sidebar back.
             Self::TabsPanel => {
                 FeatureFlag::VerticalTabs.is_enabled()
-                    && *TabSettings::as_ref(app).use_vertical_tabs
+                    && (crate::swarm::SWARM_CHROME || *TabSettings::as_ref(app).use_vertical_tabs)
             }
             Self::ToolsPanel => true,
             Self::AgentManagement => {

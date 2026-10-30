@@ -105,7 +105,7 @@ use warpui::event::KeyState;
 use warpui::fonts::{Properties, Weight};
 use warpui::geometry::vector::{Vector2F, vec2f};
 use warpui::keymap::Context;
-use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback};
+use warpui::modals::{AlertDialogWithCallbacks, AppModalCallback, ModalButton};
 use warpui::notification::{NotificationSendError, RequestPermissionsOutcome, UserNotification};
 use warpui::platform::{
     Cursor, FilePickerConfiguration, FullscreenState, SystemTheme, TerminationMode,
@@ -605,6 +605,7 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
 const SWARM_DETACHED_BUTTON_POSITION_ID: &str = "workspace_view:swarm_detached_button";
+const SWARM_CONNECT_BUTTON_POSITION_ID: &str = "workspace_view:swarm_connect_button";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TeamNavigationMode {
@@ -1143,6 +1144,8 @@ pub struct Workspace {
     show_team_switcher_menu: bool,
     swarm_detached_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_swarm_detached_menu: bool,
+    swarm_hosts_menu: ViewHandle<Menu<WorkspaceAction>>,
+    show_swarm_hosts_menu: bool,
     theme_creator_modal: ViewHandle<ThemeCreatorModal>,
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
@@ -3543,6 +3546,8 @@ impl Workspace {
             show_team_switcher_menu: false,
             swarm_detached_menu: Self::build_swarm_detached_menu(ctx),
             show_swarm_detached_menu: false,
+            swarm_hosts_menu: Self::build_swarm_hosts_menu(ctx),
+            show_swarm_hosts_menu: false,
             is_user_menu_open: false,
             tab_bar_pinned_by_popup: false,
             user_menu,
@@ -6338,6 +6343,163 @@ impl Workspace {
         menu
     }
 
+    fn build_swarm_hosts_menu(ctx: &mut ViewContext<Self>) -> ViewHandle<Menu<WorkspaceAction>> {
+        let menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
+        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.show_swarm_hosts_menu = false;
+                ctx.notify();
+            }
+        });
+        menu
+    }
+
+    fn open_swarm_hosts_menu(&mut self, items: Vec<MenuItem<WorkspaceAction>>, ctx: &mut ViewContext<Self>) {
+        self.swarm_hosts_menu.update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.show_swarm_hosts_menu = true;
+        ctx.focus(&self.swarm_hosts_menu);
+        ctx.notify();
+    }
+
+    fn swarm_alert(&mut self, title: impl Into<String>, text: impl Into<String>, ctx: &mut ViewContext<Self>) {
+        let dialog = AlertDialogWithCallbacks::for_view(title, text, vec![ModalButton::for_view("OK", |_, _| {})], |_, _| {});
+        ctx.show_native_platform_modal(dialog);
+    }
+
+    /// The ssh hosts from `~/.ssh/config`; picking one connects to it.
+    #[cfg(unix)]
+    fn show_swarm_hosts_menu(&mut self, ctx: &mut ViewContext<Self>) {
+        let mut items: Vec<_> = warp_terminal::local_tty::daemon::ssh_hosts()
+            .into_iter()
+            .map(|host| {
+                MenuItemFields::new(host.clone())
+                    .with_on_select_action(WorkspaceAction::SwarmConnectHost(host))
+                    .into_item()
+            })
+            .collect();
+        if items.is_empty() {
+            items.push(MenuItemFields::new("No hosts in ~/.ssh/config").with_disabled(true).into_item());
+        }
+        self.open_swarm_hosts_menu(items, ctx);
+    }
+
+    /// Checks ssh access and swarmd on `host`, then lists its sessions, offers
+    /// to install swarmd, or explains what's wrong.
+    #[cfg(unix)]
+    fn connect_swarm_host(&mut self, host: String, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon::{self, HostCheck};
+        let Some(daemons) = daemon::daemons() else { return };
+        let probe = host.clone();
+        let rx = daemons.run(async move { daemon::check_host(&probe).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, check, ctx| match check {
+            Ok(HostCheck::Ready) => me.show_swarm_host_sessions(host, ctx),
+            Ok(HostCheck::NeedsInstall { os, installable: true }) => {
+                let install_host = host.clone();
+                let dialog = AlertDialogWithCallbacks::for_view(
+                    format!("Install swarmd on {host}?"),
+                    format!(
+                        "{host} ({os}) doesn't have the Swarm session daemon yet. Swarm will copy swarmd, \
+                         swarm-shim and swarmctl from this app to ~/.local/share/swarm/bin on {host}. \
+                         No admin rights are needed."
+                    ),
+                    vec![
+                        ModalButton::for_view("Install", move |me: &mut Self, ctx| {
+                            me.install_swarm_host(install_host, ctx)
+                        }),
+                        ModalButton::for_view("Cancel", |_, _| {}),
+                    ],
+                    |_, _| {},
+                );
+                ctx.show_native_platform_modal(dialog);
+            }
+            Ok(HostCheck::NeedsInstall { os, installable: false }) => me.swarm_alert(
+                format!("swarmd isn't installed on {host}"),
+                format!(
+                    "{host} runs {os}, and this build of Swarm only includes binaries for this Mac. \
+                     Build swarm-term on {host} (cargo build -p swarmd -p swarmctl) and copy swarmd and \
+                     swarm-shim to ~/.local/share/swarm/bin there, then connect again."
+                ),
+                ctx,
+            ),
+            Ok(HostCheck::Unreachable(message)) => {
+                me.swarm_alert(format!("Couldn't connect to {host}"), message, ctx)
+            }
+            Err(_) => {}
+        });
+    }
+
+    #[cfg(unix)]
+    fn install_swarm_host(&mut self, host: String, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let target = host.clone();
+        let rx = daemons.run(async move { daemon::install_swarmd(&target).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+            Ok(Ok(())) => me.connect_swarm_host(host, ctx),
+            Ok(Err(e)) => me.swarm_alert(format!("Couldn't install swarmd on {host}"), format!("{e:#}"), ctx),
+            Err(_) => {}
+        });
+    }
+
+    /// `host`'s sessions, to open as tabs, plus a new one.
+    #[cfg(unix)]
+    fn show_swarm_host_sessions(&mut self, host: String, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        crate::swarm::sessions::SwarmSessions::handle(ctx).update(ctx, |sessions, ctx| {
+            sessions.watch_host(host.clone(), ctx)
+        });
+        let Some(daemons) = daemon::daemons() else { return };
+        let target = host.clone();
+        let rx = daemons.run(async move { daemon::list_sessions(Some(&target)).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+            Ok(Ok(sessions)) => {
+                let mut items = vec![MenuItemFields::new(format!("New session on {host}"))
+                    .with_on_select_action(WorkspaceAction::SwarmNewSession { host: Some(host.clone()) })
+                    .into_item()];
+                for s in sessions.iter().filter(|s| s.is_running()) {
+                    let what = s.foreground.clone().unwrap_or_else(|| "idle".to_string());
+                    let cwd = s.cwd.clone().unwrap_or_default();
+                    let mut label = format!("{}   {cwd}   {what}", s.display_name());
+                    if !s.clients.is_empty() {
+                        label.push_str("   (open elsewhere)");
+                    }
+                    let tab = crate::swarm::ReattachTab::for_session(Some(&host), s);
+                    items.push(
+                        MenuItemFields::new(label).with_on_select_action(WorkspaceAction::SwarmReattach(tab)).into_item(),
+                    );
+                }
+                me.open_swarm_hosts_menu(items, ctx);
+            }
+            Ok(Err(e)) => me.swarm_alert(format!("Couldn't list sessions on {host}"), format!("{e:#}"), ctx),
+            Err(_) => {}
+        });
+    }
+
+    /// Starts a login shell on `host` and opens it; Warp's setup is typed into it.
+    #[cfg(unix)]
+    fn new_swarm_session(&mut self, host: Option<String>, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let target = host.clone();
+        let rx = daemons.run(async move { daemon::create_session(target.as_deref(), 120, 40).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+            Ok(Ok(session)) => {
+                let tab = crate::swarm::ReattachTab::for_session(host.as_deref(), &session);
+                me.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(&tab))),
+                    Arc::new(HashMap::new()),
+                    tab.name.clone(),
+                    ctx,
+                );
+            }
+            Ok(Err(e)) => {
+                let where_ = host.unwrap_or_else(|| "this Mac".to_string());
+                me.swarm_alert(format!("Couldn't start a session on {where_}"), format!("{e:#}"), ctx)
+            }
+            Err(_) => {}
+        });
+    }
+
     /// Lists detached sessions; picking one re-attaches it in a new tab.
     #[cfg(unix)]
     fn show_swarm_detached_menu(&mut self, ctx: &mut ViewContext<Self>) {
@@ -6348,7 +6510,7 @@ impl Workspace {
                 let what = s.foreground.clone().unwrap_or_else(|| "idle".to_string());
                 let cwd = s.cwd.clone().unwrap_or_default();
                 let label = format!("{}   {cwd}   {what}", s.display_name());
-                let tab = crate::swarm::ReattachTab::for_session(s);
+                let tab = crate::swarm::ReattachTab::for_session(None, s);
                 let label = if tab.has_warp_integration() { label } else { format!("{label}   (no blocks)") };
                 MenuItemFields::new(label)
                     .with_on_select_action(WorkspaceAction::SwarmReattach(tab))
@@ -9671,6 +9833,22 @@ impl Workspace {
     }
 
     fn toggle_vertical_tabs_panel(&mut self, ctx: &mut ViewContext<Self>) {
+        // swarm-term: the sidebar toggle switches between sessions listed in the
+        // sidebar and sessions as tabs in the title bar.
+        if crate::swarm::SWARM_CHROME {
+            let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
+            TabSettings::handle(ctx).update(ctx, |settings, ctx| {
+                let _ = settings.use_vertical_tabs.set_value(!sidebar_shown, ctx);
+            });
+            if sidebar_shown {
+                self.close_vertical_tabs_settings_popup();
+                self.vertical_tabs_panel.clear_detail_sidecar();
+            }
+            self.vertical_tabs_panel_open = true;
+            self.sync_window_button_visibility(ctx);
+            ctx.notify();
+            return;
+        }
         self.vertical_tabs_panel_open = !self.vertical_tabs_panel_open;
         if !self.vertical_tabs_panel_open {
             self.close_vertical_tabs_settings_popup();
@@ -20877,7 +21055,15 @@ impl Workspace {
             FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs;
 
         let (is_active, tooltip_text, action, keybinding_name, save_position_id) =
-            if vertical_tabs_active {
+            if crate::swarm::SWARM_CHROME {
+                (
+                    vertical_tabs_active && self.vertical_tabs_panel_open,
+                    "Sessions sidebar",
+                    WorkspaceAction::ToggleVerticalTabsPanel,
+                    "workspace:toggle_vertical_tabs_panel",
+                    "workspace:toggle_vertical_tabs_panel",
+                )
+            } else if vertical_tabs_active {
                 (
                     self.vertical_tabs_panel_open,
                     "Tabs panel",
@@ -21206,11 +21392,38 @@ impl Workspace {
     /// sessions are running with nothing attached.
     #[cfg(unix)]
     fn add_swarm_title_bar_controls(&self, row: &mut Flex, appearance: &Appearance, ctx: &AppContext) {
+        let theme = appearance.theme();
+        let connect_color = theme.main_text_color(theme.background());
+        let connect_font = appearance.ui_font_family();
+        let connect = Hoverable::new(self.mouse_states.swarm_connect_button.clone(), move |state| {
+            Container::new(
+                Text::new_inline("Connect…", connect_font, 12.).with_color(connect_color.into()).finish(),
+            )
+            .with_background(if state.is_hovered() {
+                internal_colors::fg_overlay_2(theme)
+            } else {
+                internal_colors::fg_overlay_1(theme)
+            })
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_padding_left(10.)
+            .with_padding_right(10.)
+            .with_padding_top(4.)
+            .with_padding_bottom(4.)
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmShowHostsMenu))
+        .finish();
+        row.add_child(
+            Container::new(SavePosition::new(connect, SWARM_CONNECT_BUTTON_POSITION_ID).finish())
+                .with_margin_right(6.)
+                .finish(),
+        );
+
         let count = crate::swarm::sessions::SwarmSessions::as_ref(ctx).detached().count();
         if count == 0 {
             return;
         }
-        let theme = appearance.theme();
         let text_color = theme.main_text_color(theme.background());
         let font = appearance.ui_font_family();
         let label = format!("{count} detached");
@@ -21616,13 +21829,18 @@ impl Workspace {
         // the freed flex is distributed accross the remaining flex items in the tab bar.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
-        self.add_configurable_right_side_tab_bar_controls(
-            &mut tab_bar,
-            &config,
-            is_web_anonymous_user,
-            appearance,
-            ctx,
-        );
+        if crate::swarm::SWARM_CHROME {
+            #[cfg(unix)]
+            self.add_swarm_title_bar_controls(&mut tab_bar, appearance, ctx);
+        } else {
+            self.add_configurable_right_side_tab_bar_controls(
+                &mut tab_bar,
+                &config,
+                is_web_anonymous_user,
+                appearance,
+                ctx,
+            );
+        }
 
         let left_padding = self.compute_tab_bar_left_padding(ctx);
 
@@ -25683,6 +25901,18 @@ impl TypedActionView for Workspace {
                 #[cfg(unix)]
                 self.show_swarm_detached_menu(ctx);
             }
+            SwarmShowHostsMenu => {
+                #[cfg(unix)]
+                self.show_swarm_hosts_menu(ctx);
+            }
+            SwarmConnectHost(host) => {
+                #[cfg(unix)]
+                self.connect_swarm_host(host.clone(), ctx);
+            }
+            SwarmNewSession { host } => {
+                #[cfg(unix)]
+                self.new_swarm_session(host.clone(), ctx);
+            }
             SwarmReattach(tab) => {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
@@ -27298,6 +27528,19 @@ impl View for Workspace {
                     ParentOffsetBounds::WindowByPosition,
                     ParentAnchor::TopLeft,
                     ChildAnchor::TopLeft,
+                ),
+            );
+        }
+
+        if self.show_swarm_hosts_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.swarm_hosts_menu).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    SWARM_CONNECT_BUTTON_POSITION_ID,
+                    vec2f(0., 4.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomRight,
+                    ChildAnchor::TopRight,
                 ),
             );
         }
