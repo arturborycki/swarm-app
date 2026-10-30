@@ -62,6 +62,14 @@ impl ReattachTab {
     }
 }
 
+static REMOTE_TABS_CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// True only for the first caller in this run: remote sessions are reopened
+/// once, in the first window.
+pub fn claim_remote_tab_reopen() -> bool {
+    !REMOTE_TABS_CLAIMED.swap(true, std::sync::atomic::Ordering::SeqCst)
+}
+
 /// Whether shells live in `swarmd` sessions. Then Warp's own window/tab
 /// restore is off: the daemon's sessions are the tabs to bring back.
 pub fn use_daemon_sessions() -> bool {

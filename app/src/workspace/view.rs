@@ -4099,6 +4099,13 @@ impl Workspace {
     ) {
         self.vertical_tabs_panel_open =
             Self::initial_vertical_tabs_panel_open(&workspace_setting, ctx);
+        #[cfg(unix)]
+        if matches!(workspace_setting, NewWorkspaceSource::Reattach { .. } | NewWorkspaceSource::Empty { .. })
+            && crate::swarm::use_daemon_sessions()
+            && crate::swarm::claim_remote_tab_reopen()
+        {
+            self.reopen_remote_tabs(ctx);
+        }
         match workspace_setting {
             NewWorkspaceSource::Reattach { tabs } => {
                 if tabs.is_empty() {
@@ -6392,7 +6399,10 @@ impl Workspace {
         let probe = host.clone();
         let rx = daemons.run(async move { daemon::check_host(&probe).await });
         let _ = ctx.spawn(async move { rx.recv().await }, move |me, check, ctx| match check {
-            Ok(HostCheck::Ready) => me.show_swarm_host_sessions(host, ctx),
+            Ok(HostCheck::Ready) => {
+                daemon::remember_host(&host);
+                me.show_swarm_host_sessions(host, ctx)
+            }
             Ok(HostCheck::NeedsInstall { os, installable: true }) => {
                 let install_host = host.clone();
                 let dialog = AlertDialogWithCallbacks::for_view(
@@ -6473,6 +6483,40 @@ impl Workspace {
             Ok(Err(e)) => me.swarm_alert(format!("Couldn't list sessions on {host}"), format!("{e:#}"), ctx),
             Err(_) => {}
         });
+    }
+
+    /// In the background, brings back as tabs the sessions on hosts the user
+    /// connected to before that are marked to reopen. Unreachable hosts are
+    /// skipped; the tab the user is on keeps focus.
+    #[cfg(unix)]
+    fn reopen_remote_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        for host in daemon::known_hosts() {
+            let target = host.clone();
+            let rx = daemons.run(async move { daemon::reopenable_sessions(&target).await });
+            let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+                Ok(Ok(sessions)) if !sessions.is_empty() => {
+                    crate::swarm::sessions::SwarmSessions::handle(ctx).update(ctx, |model, ctx| {
+                        model.watch_host(host.clone(), ctx)
+                    });
+                    let active = me.active_tab_index;
+                    for session in &sessions {
+                        let tab = crate::swarm::ReattachTab::for_session(Some(&host), session);
+                        me.add_tab_with_pane_layout(
+                            PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(&tab))),
+                            Arc::new(HashMap::new()),
+                            tab.name.clone(),
+                            ctx,
+                        );
+                    }
+                    me.activate_tab_internal(active, ctx);
+                }
+                Ok(Ok(_)) => {}
+                Ok(Err(e)) => log::info!("swarm: not reopening sessions on {host}: {e:#}"),
+                Err(_) => {}
+            });
+        }
     }
 
     /// Starts a login shell on `host` and opens it; Warp's setup is typed into it.

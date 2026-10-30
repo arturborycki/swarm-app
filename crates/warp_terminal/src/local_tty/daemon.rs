@@ -727,6 +727,45 @@ pub async fn install_swarmd(host: &str) -> Result<()> {
     Ok(())
 }
 
+/// Hosts the user has connected to, oldest first, stored in Swarm's state
+/// dir so their sessions can be reopened at launch.
+fn known_hosts_file() -> std::path::PathBuf {
+    swarm_client::swarm_proto::paths::state_dir().join("hosts")
+}
+
+pub fn known_hosts() -> Vec<String> {
+    std::fs::read_to_string(known_hosts_file())
+        .map(|s| s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
+        .unwrap_or_default()
+}
+
+pub fn remember_host(host: &str) {
+    let mut hosts = known_hosts();
+    if hosts.iter().any(|h| h == host) {
+        return;
+    }
+    hosts.push(host.to_string());
+    let path = known_hosts_file();
+    let result = std::fs::create_dir_all(path.parent().unwrap_or(&path))
+        .and_then(|_| std::fs::write(&path, hosts.join("\n") + "\n"));
+    if let Err(e) = result {
+        log::warn!("swarm: couldn't remember host {host}: {e}");
+    }
+}
+
+/// `host`'s running sessions marked to reopen that nothing is attached to, in
+/// tab order (what to bring back as tabs at launch).
+pub async fn reopenable_sessions(host: &str) -> Result<Vec<DaemonSession>> {
+    let mut sessions = tokio::time::timeout(Duration::from_secs(20), list_sessions(Some(host)))
+        .await
+        .context("timed out")??;
+    sessions.retain(|s| {
+        s.is_running() && s.clients.is_empty() && s.ui.get(META_AUTO_ATTACH).map(String::as_str) == Some("true")
+    });
+    sessions.sort_by_key(|s| (s.ui.get(META_TAB_ORDER).and_then(|v| v.parse::<u64>().ok()).unwrap_or(u64::MAX), s.created_ms));
+    Ok(sessions)
+}
+
 /// Sessions on `host`, oldest first.
 pub async fn list_sessions(host: Option<&str>) -> Result<Vec<DaemonSession>> {
     let daemons = daemons().context("daemon sessions are off")?;
