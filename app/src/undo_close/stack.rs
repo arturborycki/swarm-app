@@ -366,7 +366,10 @@ impl UndoCloseStack {
     /// Pushes a new item onto the stack.
     fn push_item(&mut self, closed_item: ClosedItem, ctx: &mut ModelContext<Self>) {
         let settings = UndoCloseSettings::as_ref(ctx);
-        if !*settings.enabled {
+        // swarm-term: closed sessions live on in the daemon (detached menu,
+        // reopening a window), so holding their terminals here would only keep
+        // them attached and stop them from being reopened.
+        if !*settings.enabled || crate::swarm::use_daemon_sessions() {
             closed_item.discard(ctx);
             return;
         }

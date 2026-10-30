@@ -197,9 +197,6 @@ impl PtySpawner {
     /// Does any work necessary to clean up state in advance of the app
     /// terminating.
     pub fn prepare_for_app_termination(&mut self) {
-        // swarm-term: daemon sessions detached from here on are reopened next launch.
-        #[cfg(unix)]
-        super::daemon::app_is_quitting();
         // Drop the backing `TerminalServer`, if one exists, killing the child
         // process.
         #[cfg(unix)]

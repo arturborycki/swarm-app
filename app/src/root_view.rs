@@ -1244,6 +1244,15 @@ pub(crate) fn open_new_window_get_handles(
 
 /// Opens a new window.
 fn open_new(_: &(), ctx: &mut AppContext) {
+    // swarm-term: a new window first brings back sessions marked to reopen
+    // that aren't open anywhere (e.g. after their window was closed).
+    if crate::swarm::use_daemon_sessions() {
+        let tabs = crate::swarm::reattachable_tabs();
+        if !tabs.is_empty() {
+            open_new_with_workspace_source(NewWorkspaceSource::Reattach { tabs }, ctx);
+            return;
+        }
+    }
     open_new_window_get_handles(None, ctx);
 }
 

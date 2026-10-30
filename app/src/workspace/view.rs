@@ -12555,6 +12555,20 @@ impl Workspace {
         // to fall out of sync.  This can cause inconsistencies.
         self.cancel_tab_rename(ctx);
 
+        // swarm-term: closing a tab (unlike a window or quitting) means "don't
+        // reopen this session"; it stays running and listed as detached.
+        #[cfg(unix)]
+        {
+            let warp_session_ids = tab_indices_vec
+                .iter()
+                .filter_map(|i| self.tabs.get(*i))
+                .flat_map(|tab| tab.pane_group.as_ref(ctx).terminal_views(ctx))
+                .filter_map(|view| view.as_ref(ctx).active_block_session_id())
+                .map(|id| id.as_u64())
+                .collect();
+            warp_terminal::local_tty::daemon::forget_sessions(warp_session_ids);
+        }
+
         // Remove the tabs in reverse order to avoid indexing OOB.
         for i in tab_indices_vec.into_iter().sorted().rev() {
             self.remove_tab(i, add_to_undo_stack, true, ctx);

@@ -138,8 +138,37 @@ async fn watch_once(on_change: &impl Fn(Vec<DaemonSession>) -> bool) -> Result<b
     }
 }
 
-/// Running sessions that were open as tabs when the app last quit
-/// (`auto_attach=true`), in tab order. Starts the daemon if needed; empty if
+/// Marks the daemon sessions behind these Warp session ids as not reopening
+/// (`auto_attach=false`), in the background: the user closed their tabs.
+pub fn forget_sessions(warp_session_ids: Vec<u64>) {
+    if warp_session_ids.is_empty() || !enabled() {
+        return;
+    }
+    let spawned = std::thread::Builder::new().name("swarm-forget".into()).spawn(move || {
+        let Ok(rt) = tokio::runtime::Builder::new_current_thread().enable_all().build() else { return };
+        let result = rt.block_on(async {
+            let client = Client::connect_local("warp").await?;
+            for session in client.list().await? {
+                let id = session.ui.get(META_SESSION_ID).and_then(|v| v.parse::<u64>().ok());
+                if id.is_some_and(|id| warp_session_ids.contains(&id)) {
+                    let mut ui = BTreeMap::new();
+                    ui.insert(META_AUTO_ATTACH.to_string(), "false".to_string());
+                    client.set_meta(&session.id, swarm_client::swarm_proto::MetaUpdate { name: None, ui }).await?;
+                }
+            }
+            anyhow::Ok(())
+        });
+        if let Err(e) = result {
+            log::warn!("swarm: couldn't mark closed sessions: {e:#}");
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("swarm: {e}");
+    }
+}
+
+/// Running sessions marked to reopen (`auto_attach=true`) that no client is
+/// attached to, in tab order. Starts the daemon if needed; empty if
 /// the daemon is unavailable.
 pub fn reattachable_sessions() -> Vec<DaemonSession> {
     if !enabled() {
@@ -160,7 +189,9 @@ pub fn reattachable_sessions() -> Vec<DaemonSession> {
             return Vec::new();
         }
     };
-    sessions.retain(|s| s.is_running() && s.ui.get(META_AUTO_ATTACH).map(String::as_str) == Some("true"));
+    sessions.retain(|s| {
+        s.is_running() && s.clients.is_empty() && s.ui.get(META_AUTO_ATTACH).map(String::as_str) == Some("true")
+    });
     sessions.sort_by_key(|s| (s.ui.get(META_TAB_ORDER).and_then(|v| v.parse::<u64>().ok()).unwrap_or(u64::MAX), s.created_ms));
     sessions
 }
@@ -176,16 +207,7 @@ pub struct DaemonSpawner {
 
 enum Ctl {
     Resize(Size),
-    /// `forget`: the tab was closed, so don't reopen the session at launch.
-    Detach { forget: bool },
-}
-
-/// Set when the app starts quitting: tabs detached from then on stay marked
-/// for reopening, while a tab closed before that is not reopened.
-static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-
-pub fn app_is_quitting() {
-    QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
+    Detach,
 }
 
 impl DaemonSpawner {
@@ -394,17 +416,7 @@ async fn run_bridge(
                 Some(Ctl::Resize(size)) => {
                     let _ = att.resize(size).await;
                 }
-                Some(Ctl::Detach { forget }) => {
-                    if forget {
-                        let mut ui = BTreeMap::new();
-                        ui.insert(META_AUTO_ATTACH.to_string(), "false".to_string());
-                        let update = swarm_client::swarm_proto::MetaUpdate { name: None, ui };
-                        if let Err(e) = client.set_meta(&id, update).await {
-                            log::warn!("swarm: couldn't mark {id} detached: {e:#}");
-                        }
-                    }
-                    break;
-                }
+                Some(Ctl::Detach) => break,
                 None => break,
             },
         }
@@ -428,10 +440,9 @@ impl PtyHandle for DaemonPtyHandle {
         Ok(*self.status.lock().unwrap())
     }
 
-    /// Detaches only: the daemon keeps the session for the next attach.
+    /// Detaches only: the daemon keeps the session (and whether it reopens).
     fn kill(&mut self) -> Result<()> {
-        let forget = !QUITTING.load(std::sync::atomic::Ordering::SeqCst);
-        let _ = self.ctl.send(Ctl::Detach { forget });
+        let _ = self.ctl.send(Ctl::Detach);
         Ok(())
     }
 
