@@ -1091,13 +1091,36 @@ fn on_shell_determined<S: TerminalSurface>(
     // swarm-term: a tab re-attaching to a running daemon session keeps that
     // shell's Warp session id and must not send it the init script again.
     #[cfg(unix)]
-    let reattach_warp_id = warp_terminal::local_tty::daemon::reattach_warp_session_id(&env_vars);
+    let reattach = warp_terminal::local_tty::daemon::reattach_request(&env_vars);
+    #[cfg(not(unix))]
+    let reattach: Option<()> = None;
+    #[cfg(unix)]
+    let reattach_warp_id = reattach.as_ref().and_then(|r| r.warp_session_id);
     #[cfg(not(unix))]
     let reattach_warp_id: Option<u64> = None;
+    // An idle shell without Warp's integration gets Warp's setup script typed
+    // into it, under the id generated for this tab.
+    #[cfg(unix)]
+    let warpify_shell = reattach
+        .as_ref()
+        .filter(|r| r.warp_session_id.is_none())
+        .and_then(|r| r.warpify_shell.as_deref())
+        .and_then(crate::terminal::shell::ShellType::from_name);
+    #[cfg(not(unix))]
+    let warpify_shell: Option<crate::terminal::shell::ShellType> = None;
     let generated_session_id = match reattach_warp_id {
         Some(id) => id.into(),
         None => shell_starter.session_id(),
     };
+    #[cfg(unix)]
+    let mut env_vars = env_vars;
+    #[cfg(unix)]
+    if warpify_shell.is_some() {
+        env_vars.insert(
+            warp_terminal::local_tty::daemon::REATTACH_WARP_ID_ENV.into(),
+            generated_session_id.as_u64().to_string().into(),
+        );
+    }
     manager
         .model()
         .lock()
@@ -1124,10 +1147,10 @@ fn on_shell_determined<S: TerminalSurface>(
     let model = manager.model();
     #[cfg(windows)]
     let event_loop_tx = manager.event_loop_tx.clone();
-    let init_script = if reattach_warp_id.is_some() {
-        Ok(())
-    } else {
-        manager.enqueue_init_script(&shell_starter, generated_session_id)
+    let init_script = match (reattach.is_some(), warpify_shell) {
+        (false, _) => manager.enqueue_init_script(&shell_starter, generated_session_id),
+        (true, Some(shell_type)) => manager.enqueue_warpify_script(shell_type, generated_session_id),
+        (true, None) => Ok(()),
     };
     let pty = match init_script
         .context("Failed to write shell init script to the pty")
@@ -1215,6 +1238,18 @@ impl<S> TerminalManager<S> {
         self.pty_controller.update(app_ctx, |pty_controller, ctx| {
             pty_controller.send_switch_to_warp_prompt_bindkey(ctx);
         });
+    }
+
+    /// swarm-term: types Warp's setup script into an already-running idle shell
+    /// (the same script a new zsh receives), so it gets Warp's integration.
+    fn enqueue_warpify_script(
+        &self,
+        shell_type: crate::terminal::shell::ShellType,
+        session_id: SessionId,
+    ) -> Result<(), SendError<Message>> {
+        let script = crate::terminal::bootstrap::init_shell_script_for_shell(shell_type, &crate::ASSETS, session_id);
+        self.event_loop_tx.send(Message::Input(script.into_bytes().into()))?;
+        self.event_loop_tx.send(Message::Input(shell_type.execute_command_bytes().into()))
     }
 
     fn enqueue_init_script(

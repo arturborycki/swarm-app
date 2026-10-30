@@ -22,17 +22,33 @@ pub const SKIP_WARP_ONBOARDING: bool = true;
 #[derive(Debug, Clone)]
 pub struct ReattachTab {
     pub session_id: String,
-    pub warp_session_id: u64,
+    /// The shell's Warp session id, when it already has Warp's integration.
+    pub warp_session_id: Option<u64>,
+    /// For an idle shell without it: the shell to set Warp's integration up in.
+    pub warpify_shell: Option<String>,
 }
 
 #[cfg(unix)]
 impl ReattachTab {
-    /// The tab for a daemon session, if it has Warp shell integration (it was
-    /// started by this app).
-    pub fn for_session(session: &warp_terminal::local_tty::daemon::DaemonSession) -> Option<Self> {
+    /// The tab for a daemon session. Sessions this app started already have
+    /// Warp's integration; an idle zsh, bash or fish started elsewhere gets it
+    /// set up; anything else (a running program) opens without it.
+    pub fn for_session(session: &warp_terminal::local_tty::daemon::DaemonSession) -> Self {
         use warp_terminal::local_tty::daemon::META_SESSION_ID;
-        let warp_session_id = session.ui.get(META_SESSION_ID)?.parse().ok()?;
-        Some(ReattachTab { session_id: session.id.clone(), warp_session_id })
+        let warp_session_id = session.ui.get(META_SESSION_ID).and_then(|v| v.parse().ok());
+        let program = session
+            .command
+            .first()
+            .map(|argv0| argv0.rsplit('/').next().unwrap_or(argv0).trim_start_matches('-').to_string());
+        let warpify_shell = program
+            .filter(|p| matches!(p.as_str(), "zsh" | "bash" | "fish"))
+            .filter(|_| warp_session_id.is_none() && session.foreground.is_none());
+        ReattachTab { session_id: session.id.clone(), warp_session_id, warpify_shell }
+    }
+
+    /// Whether the tab will show Warp blocks (otherwise it shows raw output).
+    pub fn has_warp_integration(&self) -> bool {
+        self.warp_session_id.is_some() || self.warpify_shell.is_some()
     }
 }
 
@@ -50,7 +66,7 @@ pub fn reattachable_tabs() -> Vec<ReattachTab> {
     #[cfg(unix)]
     return warp_terminal::local_tty::daemon::reattachable_sessions()
         .into_iter()
-        .map(|s| ReattachTab { session_id: s.session_id, warp_session_id: s.warp_session_id })
+        .map(|s| ReattachTab::for_session(&s))
         .collect();
     #[cfg(not(unix))]
     Vec::new()
@@ -63,8 +79,14 @@ pub fn reattach_terminal_options(tab: &ReattachTab) -> crate::pane_group::NewTer
     #[cfg(unix)]
     {
         use warp_terminal::local_tty::daemon::{REATTACH_SESSION_ENV, REATTACH_WARP_ID_ENV};
+        use warp_terminal::local_tty::daemon::REATTACH_WARPIFY_SHELL_ENV;
         options.env_vars.insert(REATTACH_SESSION_ENV.into(), tab.session_id.clone().into());
-        options.env_vars.insert(REATTACH_WARP_ID_ENV.into(), tab.warp_session_id.to_string().into());
+        if let Some(id) = tab.warp_session_id {
+            options.env_vars.insert(REATTACH_WARP_ID_ENV.into(), id.to_string().into());
+        }
+        if let Some(shell) = &tab.warpify_shell {
+            options.env_vars.insert(REATTACH_WARPIFY_SHELL_ENV.into(), shell.clone().into());
+        }
     }
     options
 }

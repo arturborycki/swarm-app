@@ -6338,9 +6338,7 @@ impl Workspace {
         menu
     }
 
-    /// Lists detached sessions; picking one re-attaches it in a new tab. Sessions
-    /// started outside Swarm have no Warp shell integration and can't be shown as a
-    /// tab yet, so they're listed but disabled.
+    /// Lists detached sessions; picking one re-attaches it in a new tab.
     #[cfg(unix)]
     fn show_swarm_detached_menu(&mut self, ctx: &mut ViewContext<Self>) {
         let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
@@ -6350,14 +6348,11 @@ impl Workspace {
                 let what = s.foreground.clone().unwrap_or_else(|| "idle".to_string());
                 let cwd = s.cwd.clone().unwrap_or_default();
                 let label = format!("{}   {cwd}   {what}", s.display_name());
-                match crate::swarm::ReattachTab::for_session(s) {
-                    Some(tab) => MenuItemFields::new(label)
-                        .with_on_select_action(WorkspaceAction::SwarmReattach(tab))
-                        .into_item(),
-                    None => MenuItemFields::new(format!("{label}   (started outside Swarm)"))
-                        .with_disabled(true)
-                        .into_item(),
-                }
+                let tab = crate::swarm::ReattachTab::for_session(s);
+                let label = if tab.has_warp_integration() { label } else { format!("{label}   (no blocks)") };
+                MenuItemFields::new(label)
+                    .with_on_select_action(WorkspaceAction::SwarmReattach(tab))
+                    .into_item()
             })
             .collect();
         if items.is_empty() {

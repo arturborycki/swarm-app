@@ -57,14 +57,29 @@ pub fn is_reattached(warp_session_id: u64) -> bool {
 pub const REATTACH_SESSION_ENV: &str = "SWARM_REATTACH_SESSION_ID";
 /// The re-attached shell's Warp session id, which the model must register.
 pub const REATTACH_WARP_ID_ENV: &str = "SWARM_REATTACH_WARP_SESSION_ID";
+/// Set on a session without Warp shell integration that is an idle shell of
+/// this type (`zsh`, `bash`, `fish`): Warp's setup script is typed into it.
+pub const REATTACH_WARPIFY_SHELL_ENV: &str = "SWARM_REATTACH_WARPIFY_SHELL";
 
-/// The Warp session id to use when `env` asks to re-attach, and records it
-/// so the replayed `InitShell` hook doesn't re-run shell setup.
-pub fn reattach_warp_session_id(env: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>) -> Option<u64> {
-    env.get(std::ffi::OsStr::new(REATTACH_SESSION_ENV))?;
-    let id = env.get(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV))?.to_str()?.parse().ok()?;
-    mark_reattached(id);
-    Some(id)
+/// What a tab re-attaching to a daemon session needs to do.
+#[derive(Debug, Clone)]
+pub struct ReattachRequest {
+    /// The shell's existing Warp session id, if it already has Warp's integration.
+    pub warp_session_id: Option<u64>,
+    /// Set up Warp's integration in this idle shell.
+    pub warpify_shell: Option<String>,
+}
+
+/// The re-attach request carried by a new tab's env vars, if any. A known Warp
+/// session id is recorded so the replayed `InitShell` hook doesn't re-run setup.
+pub fn reattach_request(env: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>) -> Option<ReattachRequest> {
+    let get = |key: &str| env.get(std::ffi::OsStr::new(key)).and_then(|v| v.to_str()).map(str::to_string);
+    get(REATTACH_SESSION_ENV)?;
+    let warp_session_id = get(REATTACH_WARP_ID_ENV).and_then(|v| v.parse().ok());
+    if let Some(id) = warp_session_id {
+        mark_reattached(id);
+    }
+    Some(ReattachRequest { warp_session_id, warpify_shell: get(REATTACH_WARPIFY_SHELL_ENV) })
 }
 
 /// `env` without the re-attach keys (for shell recovery, which must start fresh).
@@ -74,6 +89,7 @@ pub fn without_reattach_keys(
     let mut env = env.clone();
     env.remove(std::ffi::OsStr::new(REATTACH_SESSION_ENV));
     env.remove(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV));
+    env.remove(std::ffi::OsStr::new(REATTACH_WARPIFY_SHELL_ENV));
     env
 }
 
@@ -122,19 +138,10 @@ async fn watch_once(on_change: &impl Fn(Vec<DaemonSession>) -> bool) -> Result<b
     }
 }
 
-/// A daemon session to open as a tab at launch.
-#[derive(Debug, Clone)]
-pub struct ReattachTab {
-    pub session_id: String,
-    pub warp_session_id: u64,
-    pub cwd: Option<String>,
-    pub title: String,
-}
-
-/// Running sessions this app created and that were open when it last quit
+/// Running sessions that were open as tabs when the app last quit
 /// (`auto_attach=true`), in tab order. Starts the daemon if needed; empty if
 /// the daemon is unavailable.
-pub fn reattachable_sessions() -> Vec<ReattachTab> {
+pub fn reattachable_sessions() -> Vec<DaemonSession> {
     if !enabled() {
         return Vec::new();
     }
@@ -153,19 +160,9 @@ pub fn reattachable_sessions() -> Vec<ReattachTab> {
             return Vec::new();
         }
     };
-    sessions.retain(|s| {
-        s.is_running()
-            && s.ui.get(META_CREATED_BY).map(String::as_str) == Some("warp")
-            && s.ui.get(META_AUTO_ATTACH).map(String::as_str) == Some("true")
-    });
+    sessions.retain(|s| s.is_running() && s.ui.get(META_AUTO_ATTACH).map(String::as_str) == Some("true"));
     sessions.sort_by_key(|s| (s.ui.get(META_TAB_ORDER).and_then(|v| v.parse::<u64>().ok()).unwrap_or(u64::MAX), s.created_ms));
     sessions
-        .into_iter()
-        .filter_map(|s| {
-            let warp_session_id = s.ui.get(META_SESSION_ID)?.parse().ok()?;
-            Some(ReattachTab { title: s.display_name().to_string(), session_id: s.id, warp_session_id, cwd: s.cwd })
-        })
-        .collect()
 }
 
 pub fn enabled() -> bool {
@@ -230,7 +227,8 @@ impl DaemonSpawner {
             close_fds: _,
         } = options;
         let reattach = env_vars.remove(std::ffi::OsStr::new(REATTACH_SESSION_ENV));
-        env_vars.remove(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV));
+        let warp_id = env_vars.remove(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV));
+        let warpify = env_vars.remove(std::ffi::OsStr::new(REATTACH_WARPIFY_SHELL_ENV));
         if let Some(id) = reattach {
             let id = id.to_string_lossy().into_owned();
             let (client, info, att) = self.rt.block_on(async {
@@ -239,6 +237,13 @@ impl DaemonSpawner {
                 // Open as a tab again: reopen it at the next launch too.
                 let mut ui = BTreeMap::new();
                 ui.insert(META_AUTO_ATTACH.to_string(), "true".to_string());
+                // A shell being set up for Warp now has a Warp session id; later
+                // re-attaches take the normal path.
+                if let (Some(shell), Some(warp_id)) = (&warpify, &warp_id) {
+                    ui.insert(META_SESSION_ID.to_string(), warp_id.to_string_lossy().into_owned());
+                    ui.insert(META_SHELL.to_string(), shell.to_string_lossy().into_owned());
+                    ui.insert(META_CREATED_BY.to_string(), "warp".to_string());
+                }
                 let update = swarm_client::swarm_proto::MetaUpdate { name: None, ui };
                 let info = client.set_meta(&id, update).await.unwrap_or_else(|_| att.info.clone());
                 anyhow::Ok((client, info, att))
