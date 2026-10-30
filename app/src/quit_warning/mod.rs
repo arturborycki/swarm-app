@@ -350,9 +350,15 @@ impl<'a> UnsavedStateSummary<'a> {
         }
     }
 
+    /// Whether closing this scope would stop running commands. In Swarm the
+    /// daemon keeps them running after a tab, window or the app closes.
+    fn closing_stops_commands(&self) -> bool {
+        self.total_long_running_commands > 0 && !crate::swarm::use_daemon_sessions()
+    }
+
     pub fn should_display_warning(&self, ctx: &AppContext) -> bool {
         *GeneralSettings::as_ref(ctx).show_warning_before_quitting
-            && (self.total_long_running_commands > 0
+            && (self.closing_stops_commands()
                 || self.shared_sessions > 0
                 || self.unsaved_code_changes)
     }
@@ -380,7 +386,7 @@ impl<'a> UnsavedStateSummary<'a> {
         }
 
         *GeneralSettings::as_ref(ctx).show_warning_before_quitting
-            && (self.total_long_running_commands > 0
+            && (self.closing_stops_commands()
                 || self.shared_sessions > 0
                 || unsaveable_changes_remain)
     }
@@ -541,7 +547,7 @@ impl<'a> QuitWarningDialog<'a> {
             QuitScope::Tabs(tabs) if tabs.len() == 1 => "Close tab?",
             QuitScope::Tabs(_) => "Close tabs?",
             QuitScope::Window(_) => "Close window?",
-            QuitScope::App => "Quit Warp?",
+            QuitScope::App => "Quit Swarm?",
             QuitScope::EditorTab { .. } => "Save changes?",
         };
 
