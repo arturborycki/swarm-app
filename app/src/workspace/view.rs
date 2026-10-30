@@ -4086,6 +4086,21 @@ impl Workspace {
         self.vertical_tabs_panel_open =
             Self::initial_vertical_tabs_panel_open(&workspace_setting, ctx);
         match workspace_setting {
+            NewWorkspaceSource::Reattach { tabs } => {
+                if tabs.is_empty() {
+                    self.configure_empty_workspace(None, None, ctx);
+                } else {
+                    for tab in &tabs {
+                        self.add_tab_with_pane_layout(
+                            PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
+                            Arc::new(HashMap::new()),
+                            None,
+                            ctx,
+                        );
+                    }
+                    self.activate_tab_internal(0, ctx);
+                }
+            }
             NewWorkspaceSource::Empty {
                 previous_active_window,
                 shell,
@@ -4343,7 +4358,8 @@ impl Workspace {
                 vertical_tabs_panel_open,
                 ..
             } => *vertical_tabs_panel_open,
-            NewWorkspaceSource::Empty { .. }
+            NewWorkspaceSource::Reattach { .. }
+            | NewWorkspaceSource::Empty { .. }
             | NewWorkspaceSource::FromTemplate { .. }
             | NewWorkspaceSource::Session { .. }
             | NewWorkspaceSource::AgentSession { .. }

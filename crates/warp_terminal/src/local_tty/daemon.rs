@@ -37,6 +37,91 @@ pub const META_CREATED_BY: &str = "created_by";
 pub const META_SESSION_ID: &str = "warp.session_id";
 pub const META_SHELL: &str = "warp.shell";
 pub const META_AUTO_ATTACH: &str = "auto_attach";
+pub const META_TAB_ORDER: &str = "tab_order";
+
+/// Warp session ids of shells this app re-attached to. Their shell setup
+/// already ran, so a replayed `InitShell` hook must not run it again.
+static REATTACHED: std::sync::LazyLock<Mutex<std::collections::HashSet<u64>>> =
+    std::sync::LazyLock::new(Default::default);
+
+pub fn mark_reattached(warp_session_id: u64) {
+    REATTACHED.lock().unwrap().insert(warp_session_id);
+}
+
+pub fn is_reattached(warp_session_id: u64) -> bool {
+    REATTACHED.lock().unwrap().contains(&warp_session_id)
+}
+
+/// Set in a new tab's env vars to re-attach it to a running daemon session
+/// instead of starting a shell; never reaches the shell's environment.
+pub const REATTACH_SESSION_ENV: &str = "SWARM_REATTACH_SESSION_ID";
+/// The re-attached shell's Warp session id, which the model must register.
+pub const REATTACH_WARP_ID_ENV: &str = "SWARM_REATTACH_WARP_SESSION_ID";
+
+/// The Warp session id to use when `env` asks to re-attach, and records it
+/// so the replayed `InitShell` hook doesn't re-run shell setup.
+pub fn reattach_warp_session_id(env: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>) -> Option<u64> {
+    env.get(std::ffi::OsStr::new(REATTACH_SESSION_ENV))?;
+    let id = env.get(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV))?.to_str()?.parse().ok()?;
+    mark_reattached(id);
+    Some(id)
+}
+
+/// `env` without the re-attach keys (for shell recovery, which must start fresh).
+pub fn without_reattach_keys(
+    env: &std::collections::HashMap<std::ffi::OsString, std::ffi::OsString>,
+) -> std::collections::HashMap<std::ffi::OsString, std::ffi::OsString> {
+    let mut env = env.clone();
+    env.remove(std::ffi::OsStr::new(REATTACH_SESSION_ENV));
+    env.remove(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV));
+    env
+}
+
+/// A daemon session to open as a tab at launch.
+#[derive(Debug, Clone)]
+pub struct ReattachTab {
+    pub session_id: String,
+    pub warp_session_id: u64,
+    pub cwd: Option<String>,
+    pub title: String,
+}
+
+/// Running sessions this app created and that were open when it last quit
+/// (`auto_attach=true`), in tab order. Starts the daemon if needed; empty if
+/// the daemon is unavailable.
+pub fn reattachable_sessions() -> Vec<ReattachTab> {
+    if !enabled() {
+        return Vec::new();
+    }
+    let rt = match tokio::runtime::Builder::new_current_thread().enable_all().build() {
+        Ok(rt) => rt,
+        Err(_) => return Vec::new(),
+    };
+    let sessions = rt.block_on(async {
+        let client = Client::connect_local("warp").await?;
+        client.list().await
+    });
+    let mut sessions = match sessions {
+        Ok(s) => s,
+        Err(e) => {
+            log::warn!("swarm: can't list daemon sessions: {e:#}");
+            return Vec::new();
+        }
+    };
+    sessions.retain(|s| {
+        s.is_running()
+            && s.ui.get(META_CREATED_BY).map(String::as_str) == Some("warp")
+            && s.ui.get(META_AUTO_ATTACH).map(String::as_str) == Some("true")
+    });
+    sessions.sort_by_key(|s| (s.ui.get(META_TAB_ORDER).and_then(|v| v.parse::<u64>().ok()).unwrap_or(u64::MAX), s.created_ms));
+    sessions
+        .into_iter()
+        .filter_map(|s| {
+            let warp_session_id = s.ui.get(META_SESSION_ID)?.parse().ok()?;
+            Some(ReattachTab { title: s.display_name().to_string(), session_id: s.id, warp_session_id, cwd: s.cwd })
+        })
+        .collect()
+}
 
 pub fn enabled() -> bool {
     std::env::var("SWARM_DAEMON").map(|v| v != "0").unwrap_or(true)
@@ -49,7 +134,16 @@ pub struct DaemonSpawner {
 
 enum Ctl {
     Resize(Size),
-    Detach,
+    /// `forget`: the tab was closed, so don't reopen the session at launch.
+    Detach { forget: bool },
+}
+
+/// Set when the app starts quitting: tabs detached from then on stay marked
+/// for reopening, while a tab closed before that is not reopened.
+static QUITTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn app_is_quitting() {
+    QUITTING.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
 impl DaemonSpawner {
@@ -82,7 +176,7 @@ impl DaemonSpawner {
             window_id,
             shell_starter,
             start_dir,
-            env_vars,
+            mut env_vars,
             enable_ssh_wrapper,
             reuse_ssh_control_master,
             shell_debug_mode,
@@ -90,6 +184,20 @@ impl DaemonSpawner {
             node_version_chip_enabled,
             close_fds: _,
         } = options;
+        let reattach = env_vars.remove(std::ffi::OsStr::new(REATTACH_SESSION_ENV));
+        env_vars.remove(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV));
+        if let Some(id) = reattach {
+            let id = id.to_string_lossy().into_owned();
+            let (client, info, att) = self.rt.block_on(async {
+                let client = self.client().await?;
+                let att = client.attach(&id, AttachMode::Full, Some(to_size(&size)), false).await?;
+                let info = att.info.clone();
+                anyhow::Ok((client, info, att))
+            })?;
+            log::info!("swarm: re-attached to daemon session {id} (pid {})", info.pid);
+            return self.bridge(client, info, att, true);
+        }
+
         let session_id = shell_starter.session_id();
         let shell_type = shell_starter.shell_type();
         let ShellStarter::Direct(starter) = shell_starter else {
@@ -232,7 +340,18 @@ async fn run_bridge(
                 Some(Ctl::Resize(size)) => {
                     let _ = att.resize(size).await;
                 }
-                Some(Ctl::Detach) | None => break,
+                Some(Ctl::Detach { forget }) => {
+                    if forget {
+                        let mut ui = BTreeMap::new();
+                        ui.insert(META_AUTO_ATTACH.to_string(), "false".to_string());
+                        let update = swarm_client::swarm_proto::MetaUpdate { name: None, ui };
+                        if let Err(e) = client.set_meta(&id, update).await {
+                            log::warn!("swarm: couldn't mark {id} detached: {e:#}");
+                        }
+                    }
+                    break;
+                }
+                None => break,
             },
         }
     }
@@ -257,7 +376,8 @@ impl PtyHandle for DaemonPtyHandle {
 
     /// Detaches only: the daemon keeps the session for the next attach.
     fn kill(&mut self) -> Result<()> {
-        let _ = self.ctl.send(Ctl::Detach);
+        let forget = !QUITTING.load(std::sync::atomic::Ordering::SeqCst);
+        let _ = self.ctl.send(Ctl::Detach { forget });
         Ok(())
     }
 

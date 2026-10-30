@@ -3175,10 +3175,22 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
                 .urls
                 .iter()
                 .any(is_cloud_agent_web_home_launch_url);
-            let app_state = if should_skip_restore { None } else { app_state };
+            // swarm-term: with daemon sessions, Warp's saved windows would
+            // start duplicate shells; the daemon's sessions are restored instead.
+            let use_daemon = crate::swarm::use_daemon_sessions();
+            let app_state = if should_skip_restore || use_daemon { None } else { app_state };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
             ctx.dispatch_global_action("root_view:open_from_restored", &arg);
+            if use_daemon && !should_skip_restore {
+                let tabs = crate::swarm::reattachable_tabs();
+                if !tabs.is_empty() {
+                    crate::root_view::open_new_with_workspace_source(
+                        crate::root_view::NewWorkspaceSource::Reattach { tabs },
+                        ctx,
+                    );
+                }
+            }
 
             // Process any URLs that were provided on the command line (which may be
             // file:// URLs or ones using our custom URL scheme).

@@ -329,6 +329,14 @@ impl<T: EventLoopSender> PtyController<T> {
     ) {
         let shell_type = pending_session_info.shell.shell_type();
 
+        // swarm-term: a re-attached daemon session replays its old `InitShell`
+        // hook; its shell is already set up and must not be bootstrapped twice.
+        #[cfg(unix)]
+        if warp_terminal::local_tty::daemon::is_reattached(pending_session_info.session_id.as_u64()) {
+            log::info!("swarm: session already bootstrapped; not re-running shell setup");
+            return;
+        }
+
         #[cfg(feature = "local_fs")]
         if let Some(path) = permanent_bootstrap_file(shell_type, pending_session_info) {
             // If there is a permanent bootstrap file, source it directly. We

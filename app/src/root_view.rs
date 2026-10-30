@@ -1591,6 +1591,10 @@ fn abort_voice_input(_: &(), ctx: &mut AppContext) {
 
 #[derive(Clone)]
 pub enum NewWorkspaceSource {
+    /// swarm-term: one tab per running daemon session, re-attached.
+    Reattach {
+        tabs: Vec<crate::swarm::ReattachTab>,
+    },
     Empty {
         previous_active_window: Option<WindowId>,
         shell: Option<AvailableShell>,
@@ -1692,7 +1696,8 @@ impl NewWorkspaceSource {
             Self::TransferredTab {
                 source_window_id, ..
             } => Some(*source_window_id),
-            Self::FromTemplate { .. }
+            Self::Reattach { .. }
+            | Self::FromTemplate { .. }
             | Self::Session { .. }
             | Self::SharedSessionAsViewer { .. }
             | Self::FromCloudConversationId { .. }

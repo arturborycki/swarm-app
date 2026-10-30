@@ -1088,7 +1088,16 @@ fn on_shell_determined<S: TerminalSurface>(
     // Register the session ID that was generated during shell starter construction.
     // For bash, fish, and PowerShell, the session ID is already baked into the command
     // args. For zsh and MSYS2, enqueue_init_script injects this same ID.
-    let generated_session_id = shell_starter.session_id();
+    // swarm-term: a tab re-attaching to a running daemon session keeps that
+    // shell's Warp session id and must not send it the init script again.
+    #[cfg(unix)]
+    let reattach_warp_id = warp_terminal::local_tty::daemon::reattach_warp_session_id(&env_vars);
+    #[cfg(not(unix))]
+    let reattach_warp_id: Option<u64> = None;
+    let generated_session_id = match reattach_warp_id {
+        Some(id) => id.into(),
+        None => shell_starter.session_id(),
+    };
     manager
         .model()
         .lock()
@@ -1104,6 +1113,9 @@ fn on_shell_determined<S: TerminalSurface>(
     } = shell_startup_resources;
     manager.recovery_resources = Some(ShellRecoveryResources {
         starter: shell_starter.clone(),
+        #[cfg(unix)]
+        original_env: warp_terminal::local_tty::daemon::without_reattach_keys(&env_vars),
+        #[cfg(not(unix))]
         original_env: env_vars.clone(),
         channel_event_proxy: channel_event_proxy.clone(),
         #[cfg(unix)]
@@ -1112,8 +1124,12 @@ fn on_shell_determined<S: TerminalSurface>(
     let model = manager.model();
     #[cfg(windows)]
     let event_loop_tx = manager.event_loop_tx.clone();
-    let pty = match manager
-        .enqueue_init_script(&shell_starter, generated_session_id)
+    let init_script = if reattach_warp_id.is_some() {
+        Ok(())
+    } else {
+        manager.enqueue_init_script(&shell_starter, generated_session_id)
+    };
+    let pty = match init_script
         .context("Failed to write shell init script to the pty")
         .and_then(|_| {
             TerminalManager::<S>::create_pty(
