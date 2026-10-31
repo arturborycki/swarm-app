@@ -4112,12 +4112,7 @@ impl Workspace {
                     self.configure_empty_workspace(None, None, ctx);
                 } else {
                     for tab in &tabs {
-                        self.add_tab_with_pane_layout(
-                            PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
-                            Arc::new(HashMap::new()),
-                            tab.title(),
-                            ctx,
-                        );
+                        self.add_swarm_tab(tab, ctx);
                     }
                     self.activate_tab_internal(0, ctx);
                 }
@@ -6503,12 +6498,7 @@ impl Workspace {
                     let active = me.active_tab_index;
                     for session in &sessions {
                         let tab = crate::swarm::ReattachTab::for_session(Some(&host), session);
-                        me.add_tab_with_pane_layout(
-                            PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(&tab))),
-                            Arc::new(HashMap::new()),
-                            tab.title(),
-                            ctx,
-                        );
+                        me.add_swarm_tab(&tab, ctx);
                     }
                     me.activate_tab_internal(active, ctx);
                 }
@@ -6516,6 +6506,60 @@ impl Workspace {
                 Ok(Err(e)) => log::info!("swarm: not reopening sessions on {host}: {e:#}"),
                 Err(_) => {}
             });
+        }
+    }
+
+    /// Opens `tab`'s session as a tab, in the tab group it was in.
+    fn add_swarm_tab(&mut self, tab: &crate::swarm::ReattachTab, ctx: &mut ViewContext<Self>) {
+        self.add_tab_with_pane_layout(
+            PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
+            Arc::new(HashMap::new()),
+            tab.title(),
+            ctx,
+        );
+        if !FeatureFlag::GroupedTabs.is_enabled() {
+            return;
+        }
+        let target = tab
+            .group
+            .as_ref()
+            .and_then(|key| self.tab_groups.values().find(|g| crate::swarm::group_key(g) == *key))
+            .map(|g| g.id);
+        // A new tab joins the active tab's group; the session's own group wins.
+        let index = self.active_tab_index;
+        if self.tabs[index].group_id.is_some() && self.tabs[index].group_id != target {
+            self.remove_tab_from_group(index, ctx);
+        }
+        let index = self.active_tab_index;
+        match (target, &tab.group) {
+            (Some(group_id), _) => self.move_tab_to_group(index, group_id, ctx),
+            (None, None) => {}
+            (None, Some(key)) => {
+                let mut group = TabGroup::new();
+                match key.strip_prefix('#').and_then(|id| uuid::Uuid::parse_str(id).ok()) {
+                    Some(id) => group.id = TabGroupId(id),
+                    None => group.name = Some(key.clone()),
+                }
+                self.tabs[index].group_id = Some(group.id);
+                self.tab_groups.insert(group.id, group);
+            }
+        }
+    }
+
+    /// Adds the group (`swarm::group_key`, empty for none) of each terminal
+    /// session in this window's tabs to `groups`, keyed by Warp session id.
+    pub fn swarm_session_groups(&self, groups: &mut HashMap<u64, String>, ctx: &AppContext) {
+        for tab in &self.tabs {
+            let key = tab
+                .group_id
+                .and_then(|id| self.tab_groups.get(&id))
+                .map(crate::swarm::group_key)
+                .unwrap_or_default();
+            for view in tab.pane_group.as_ref(ctx).terminal_views(ctx) {
+                if let Some(id) = view.as_ref(ctx).active_block_session_id() {
+                    groups.insert(id.as_u64(), key.clone());
+                }
+            }
         }
     }
 
@@ -6529,12 +6573,7 @@ impl Workspace {
         let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
             Ok(Ok(session)) => {
                 let tab = crate::swarm::ReattachTab::for_session(host.as_deref(), &session);
-                me.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(&tab))),
-                    Arc::new(HashMap::new()),
-                    tab.title(),
-                    ctx,
-                );
+                me.add_swarm_tab(&tab, ctx);
             }
             Ok(Err(e)) => {
                 let where_ = host.unwrap_or_else(|| "this Mac".to_string());
@@ -7756,7 +7795,7 @@ impl Workspace {
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
 
-        ctx.dispatch_typed_action_deferred(WorkspaceAction::RenameTabGroup(group_id));
+        self.rename_tab_group_soon(group_id, ctx);
     }
 
     /// Closes every tab in the given group and removes the group.
@@ -7819,6 +7858,15 @@ impl Workspace {
     }
 
     /// Opens the inline rename editor over the given group's header.
+    /// Starts renaming a group that was just created, once the new or moved
+    /// tab's pane has taken focus (it would otherwise take it from the editor).
+    fn rename_tab_group_soon(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
+        let _ = ctx.spawn(
+            async { warpui::r#async::Timer::after(std::time::Duration::from_millis(150)).await },
+            move |me, _, ctx| me.rename_tab_group(group_id, ctx),
+        );
+    }
+
     pub fn rename_tab_group(&mut self, group_id: TabGroupId, ctx: &mut ViewContext<Self>) {
         let Some(group) = self.tab_groups.get(&group_id) else {
             return;
@@ -7902,7 +7950,7 @@ impl Workspace {
         ctx.dispatch_global_action("workspace:save_app", ());
         ctx.notify();
 
-        ctx.dispatch_typed_action_deferred(WorkspaceAction::RenameTabGroup(group_id));
+        self.rename_tab_group_soon(group_id, ctx);
     }
 
     /// Moves the tab into `group_id`, appending it to the end of the
@@ -25958,12 +26006,7 @@ impl TypedActionView for Workspace {
                 self.new_swarm_session(host.clone(), ctx);
             }
             SwarmReattach(tab) => {
-                self.add_tab_with_pane_layout(
-                    PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
-                    Arc::new(HashMap::new()),
-                    tab.title(),
-                    ctx,
-                );
+                self.add_swarm_tab(tab, ctx);
             }
             ShowHeaderToolbarContextMenu { position } => {
                 self.show_header_toolbar_context_menu(*position, ctx);

@@ -9,6 +9,9 @@ pub fn init_feature_flags() {
     for flag in enabled_features() {
         flag.set_enabled(true);
     }
+    for flag in crate::swarm::DISABLED_WARP_FEATURES {
+        flag.set_enabled(false);
+    }
     mark_initialized();
 }
 

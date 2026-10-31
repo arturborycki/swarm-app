@@ -695,6 +695,7 @@ impl BackingView for TerminalView {
             }
         } else if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
+            && !crate::swarm::SWARM_CHROME
         {
             items.push(
                 MenuItemFields::new("Share session")

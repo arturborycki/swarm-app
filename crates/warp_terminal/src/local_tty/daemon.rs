@@ -42,6 +42,8 @@ pub const META_SESSION_ID: &str = "warp.session_id";
 pub const META_SHELL: &str = "warp.shell";
 pub const META_AUTO_ATTACH: &str = "auto_attach";
 pub const META_TAB_ORDER: &str = "tab_order";
+/// The tab group a session's tab is in: its name, or `#<id>` for an unnamed one.
+pub const META_GROUP: &str = "group";
 
 /// Warp session ids of shells this app re-attached to. Their shell setup
 /// already ran, so a replayed `InitShell` hook must not run it again.
@@ -255,6 +257,14 @@ pub fn forget_sessions(warp_session_ids: Vec<u64>) {
 pub fn name_sessions(warp_session_ids: Vec<u64>, name: Option<String>) {
     let update = swarm_client::swarm_proto::MetaUpdate { name: Some(name), ui: BTreeMap::new() };
     update_sessions(warp_session_ids, update);
+}
+
+/// Puts the daemon sessions behind these Warp session ids in the tab group
+/// `group` (empty: in none), in the background, so reattaching regroups them.
+pub fn group_sessions(warp_session_ids: Vec<u64>, group: String) {
+    let mut ui = BTreeMap::new();
+    ui.insert(META_GROUP.to_string(), group);
+    update_sessions(warp_session_ids, swarm_client::swarm_proto::MetaUpdate { name: None, ui });
 }
 
 fn update_sessions(warp_session_ids: Vec<u64>, update: swarm_client::swarm_proto::MetaUpdate) {

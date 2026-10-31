@@ -1954,6 +1954,10 @@ impl TerminalView {
         has_session_link: bool,
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
+        // swarm-term: sharing goes through Warp's servers.
+        if crate::swarm::SWARM_CHROME {
+            return items;
+        }
 
         if !model.shared_session_status().is_sharer_or_viewer() {
             items.push(

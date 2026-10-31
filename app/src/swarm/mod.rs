@@ -18,6 +18,10 @@ pub const APP_NAME: &str = "Swarm";
 /// screen. Warp's cloud sign-in stays available but opt-in.
 pub const SKIP_WARP_ONBOARDING: bool = true;
 
+/// Warp features that need Warp's servers, never turned on in Swarm.
+pub const DISABLED_WARP_FEATURES: &[crate::features::FeatureFlag] =
+    &[crate::features::FeatureFlag::CreatingSharedSessions];
+
 /// A running daemon session to open as a tab at launch.
 #[derive(Debug, Clone)]
 pub struct ReattachTab {
@@ -30,6 +34,8 @@ pub struct ReattachTab {
     pub name: Option<String>,
     /// The ssh host alias the session lives on; `None` for this Mac.
     pub host: Option<String>,
+    /// The tab group to put the tab in (`META_GROUP`).
+    pub group: Option<String>,
 }
 
 #[cfg(unix)]
@@ -53,6 +59,7 @@ impl ReattachTab {
             warpify_shell,
             name: session.name.clone(),
             host: host.map(str::to_string),
+            group: session.ui.get(warp_terminal::local_tty::daemon::META_GROUP).filter(|g| !g.is_empty()).cloned(),
         }
     }
 
@@ -67,6 +74,44 @@ impl ReattachTab {
     pub fn has_warp_integration(&self) -> bool {
         self.warp_session_id.is_some() || self.warpify_shell.is_some()
     }
+}
+
+thread_local! {
+    /// The group each session was last stored under, so only changes go out.
+    static STORED_GROUPS: std::cell::RefCell<std::collections::HashMap<u64, String>> = Default::default();
+}
+
+/// Stores every open tab's group on its daemon sessions, sending only what
+/// changed since the last call. Runs whenever the app saves its state.
+pub fn sync_session_groups(ctx: &warpui::AppContext) {
+    use warpui::SingletonEntity as _;
+    if !use_daemon_sessions() {
+        return;
+    }
+    let mut current = std::collections::HashMap::new();
+    for (_, workspace) in crate::workspace::WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
+        workspace.as_ref(ctx).swarm_session_groups(&mut current, ctx);
+    }
+    let mut changed: std::collections::BTreeMap<String, Vec<u64>> = Default::default();
+    STORED_GROUPS.with(|stored| {
+        let mut stored = stored.borrow_mut();
+        for (id, group) in current {
+            let previous = stored.get(&id).map(String::as_str).unwrap_or("");
+            if previous != group {
+                changed.entry(group.clone()).or_default().push(id);
+                stored.insert(id, group);
+            }
+        }
+    });
+    #[cfg(unix)]
+    for (group, ids) in changed {
+        warp_terminal::local_tty::daemon::group_sessions(ids, group);
+    }
+}
+
+/// The `META_GROUP` value for a tab group.
+pub fn group_key(group: &crate::workspace::tab_group::TabGroup) -> String {
+    group.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", group.id.0))
 }
 
 static REMOTE_TABS_CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);

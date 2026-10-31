@@ -131,6 +131,7 @@ fn toggle_focus_reporting(_: &(), ctx: &mut AppContext) {
 }
 
 fn save_app(_: &(), ctx: &mut AppContext) {
+    crate::swarm::sync_session_groups(ctx);
     if !AppExecutionMode::as_ref(ctx).can_save_session() {
         return;
     }
