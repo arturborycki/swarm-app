@@ -216,7 +216,11 @@ impl PtySpawner {
         ctx: &mut AppContext,
     ) -> Result<(PtySpawnResult, Box<dyn PtyHandle>)> {
         #[cfg(unix)]
-        if let Some(daemon) = &self.daemon {
+        let mut options = options;
+        #[cfg(unix)]
+        let throwaway = options.env_vars.remove(std::ffi::OsStr::new(super::daemon::NO_DAEMON_ENV)).is_some();
+        #[cfg(unix)]
+        if let Some(daemon) = self.daemon.as_ref().filter(|_| !throwaway) {
             match daemon.spawn(options.clone()) {
                 Ok(result) => {
                     hooks.spawned(PtySpawnMode::Daemon, ctx);

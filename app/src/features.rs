@@ -9,6 +9,11 @@ pub fn init_feature_flags() {
     for flag in enabled_features() {
         flag.set_enabled(true);
     }
+    // swarm-term: tabs can be dragged out into their own window (Warp enables
+    // this only in its release channel).
+    if crate::swarm::SWARM_CHROME && cfg!(target_os = "macos") {
+        warp_core::features::FeatureFlag::DragTabsToWindows.set_enabled(true);
+    }
     for flag in crate::swarm::DISABLED_WARP_FEATURES {
         flag.set_enabled(false);
     }

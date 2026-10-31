@@ -1094,6 +1094,8 @@ pub struct TabComponent<'a> {
     sole_grouped_member: bool,
     /// Locator pointing at this tab's focused pane.
     locator: PaneViewLocator,
+    /// swarm-term: false for a remote session's tab (it can't move windows).
+    can_tear_off: bool,
     /// True when this tab is part of a multi-tab (count > 1) selection. Drives
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
@@ -1266,6 +1268,7 @@ impl<'a> TabComponent<'a> {
             grouped_member: false,
             sole_grouped_member: false,
             locator,
+            can_tear_off: !crate::swarm::pane_group_is_remote(tab.pane_group.as_ref(ctx), ctx),
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
         }
@@ -2149,6 +2152,7 @@ impl UiComponent for TabComponent<'_> {
     type ElementType = Shrinkable;
 
     fn build(self) -> Self::ElementType {
+        let can_tear_off = self.can_tear_off;
         let appearance = self.appearance;
         let tab_mouse_state = self.tab.tab_mouse_state.clone();
         let tab_index = self.tab_index;
@@ -2394,7 +2398,7 @@ impl UiComponent for TabComponent<'_> {
                     });
                 })
                 .on_drop(|ctx, _, _, _| ctx.dispatch_typed_action(WorkspaceAction::DropTab));
-            let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() {
+            let draggable = if FeatureFlag::DragTabsToWindows.is_enabled() && can_tear_off {
                 draggable
             } else {
                 draggable.with_drag_axis(DragAxis::HorizontalOnly)

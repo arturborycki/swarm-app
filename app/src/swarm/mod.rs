@@ -125,6 +125,23 @@ pub fn host_color(host: &str) -> warp_core::ui::theme::AnsiColorIdentifier {
     COLORS[hash as usize % COLORS.len()]
 }
 
+/// Whether a tab holds a remote daemon session. Those can't be dragged out to
+/// a new window: their in-band command channel stays with the old window.
+pub fn pane_group_is_remote(pane_group: &crate::pane_group::PaneGroup, app: &warpui::AppContext) -> bool {
+    #[cfg(unix)]
+    return pane_group.terminal_views(app).iter().any(|view| {
+        view.as_ref(app)
+            .active_block_session_id()
+            .and_then(|id| warp_terminal::local_tty::daemon::session_is_remote(id.as_u64()))
+            == Some(true)
+    });
+    #[cfg(not(unix))]
+    {
+        let _ = (pane_group, app);
+        false
+    }
+}
+
 /// The `META_GROUP` value for a tab group.
 pub fn group_key(group: &crate::workspace::tab_group::TabGroup) -> String {
     group.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", group.id.0))

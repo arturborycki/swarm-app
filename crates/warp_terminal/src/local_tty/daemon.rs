@@ -154,6 +154,10 @@ impl Daemons {
 /// Set in a new tab's env vars to re-attach it to a running daemon session
 /// instead of starting a shell; never reaches the shell's environment.
 pub const REATTACH_SESSION_ENV: &str = "SWARM_REATTACH_SESSION_ID";
+/// Set in a new tab's env vars for a throwaway terminal (e.g. a window's
+/// placeholder tab, replaced right away): a plain local shell, no daemon
+/// session that would outlive it.
+pub const NO_DAEMON_ENV: &str = "SWARM_NO_DAEMON_SESSION";
 /// The re-attached shell's Warp session id, which the model must register.
 pub const REATTACH_WARP_ID_ENV: &str = "SWARM_REATTACH_WARP_SESSION_ID";
 /// Set on a session without Warp shell integration that is an idle shell of

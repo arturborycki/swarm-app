@@ -4306,7 +4306,7 @@ impl Workspace {
             } => {
                 self.set_is_tab_drag_preview(is_tab_drag_preview);
                 self.add_tab_with_pane_layout(
-                    Default::default(),
+                    transferred_tab_placeholder_layout(),
                     Arc::new(HashMap::new()),
                     custom_title,
                     ctx,
@@ -4335,7 +4335,7 @@ impl Workspace {
             } => {
                 self.set_is_tab_drag_preview(is_tab_drag_preview);
                 self.add_tab_with_pane_layout(
-                    Default::default(),
+                    transferred_tab_placeholder_layout(),
                     Arc::new(HashMap::new()),
                     custom_title,
                     ctx,
@@ -30640,4 +30640,17 @@ fn set_opencode_warp_plugin(new_entry: &str) -> String {
         },
         Err(e) => format!("Failed to serialize opencode.json: {e}"),
     }
+}
+
+
+/// The placeholder tab of a window made for a dragged-out tab, swapped for
+/// the real one right away. swarm-term: a plain local shell, so no daemon
+/// session is left behind when the placeholder is torn down.
+fn transferred_tab_placeholder_layout() -> PanesLayout {
+    let mut options = NewTerminalOptions::default();
+    #[cfg(unix)]
+    options
+        .env_vars
+        .insert(warp_terminal::local_tty::daemon::NO_DAEMON_ENV.into(), "1".into());
+    PanesLayout::SingleTerminal(Box::new(options))
 }
