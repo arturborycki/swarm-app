@@ -12,6 +12,7 @@ pub mod repos;
 mod selected_items;
 pub mod separator_search_item;
 pub mod tabs;
+pub mod swarm_sessions;
 pub mod view;
 pub mod warp_drive;
 mod zero_state;

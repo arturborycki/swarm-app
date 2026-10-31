@@ -280,6 +280,11 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             })
             .collect();
         file_menu_options.insert(2, swarm_new_session_on_host_menu());
+        // The navigation palette lists open tabs and detached sessions on every host.
+        file_menu_options.insert(
+            3,
+            swarm_relabel(updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx), "Open Session…"),
+        );
         file_menu_options.extend([
             MenuItem::Separator,
             swarm_workspace_item("Connect to Host…", WorkspaceAction::SwarmShowHostsMenu),

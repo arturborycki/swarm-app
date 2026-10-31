@@ -83,6 +83,8 @@ pub enum CommandPaletteItemAction {
     NewConversation,
     /// No-op action (used for non-interactable separator items that don't do anything on click).
     NoOp,
+    /// swarm-term: a workspace action (reattach a session, start one on a host).
+    Swarm(Box<crate::workspace::WorkspaceAction>),
 }
 
 impl CommandPaletteItemAction {
@@ -146,7 +148,7 @@ impl CommandPaletteItemAction {
                 ItemSummary::Project { path: path.clone() }
             }
             CommandPaletteItemAction::NewConversation => ItemSummary::NewConversation,
-            CommandPaletteItemAction::NoOp => ItemSummary::NoOp,
+            CommandPaletteItemAction::NoOp | CommandPaletteItemAction::Swarm(_) => ItemSummary::NoOp,
         }
     }
 

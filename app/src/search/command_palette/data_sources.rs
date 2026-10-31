@@ -31,6 +31,7 @@ pub struct DataSourceStore {
     all_conversation_data_source: ModelHandle<conversations::DataSource>,
     repo_data_source: ModelHandle<RepoDataSource>,
     tabs_data_source: Option<ModelHandle<tabs::DataSource>>,
+    swarm_sessions_data_source: ModelHandle<super::swarm_sessions::DataSource>,
 }
 
 impl DataSourceStore {
@@ -69,6 +70,7 @@ impl DataSourceStore {
             all_conversation_data_source,
             repo_data_source,
             tabs_data_source: None,
+            swarm_sessions_data_source: ctx.add_model(|_| super::swarm_sessions::DataSource),
         }
     }
 
@@ -93,6 +95,12 @@ impl DataSourceStore {
                 self.sessions_data_source.clone(),
                 HashSet::from([QueryFilter::Sessions]),
             );
+            if crate::swarm::SWARM_CHROME {
+                mixer.add_sync_source(
+                    self.swarm_sessions_data_source.clone(),
+                    HashSet::from([QueryFilter::Sessions]),
+                );
+            }
 
             if WarpDriveSettings::is_warp_drive_enabled(ctx) {
                 let mut warp_drive_filters = HashSet::from([

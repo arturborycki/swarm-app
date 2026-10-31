@@ -881,6 +881,7 @@ impl View {
                     destination: ForkedConversationDestination::SplitPane,
                 });
             }
+            CommandPaletteItemAction::Swarm(action) => ctx.dispatch_typed_action(&*action),
             CommandPaletteItemAction::OpenLaunchConfiguration {
                 open_in_active_window,
                 config,
