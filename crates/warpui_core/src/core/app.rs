@@ -940,6 +940,7 @@ impl AppContext {
             message_text: alert_data.message_text,
             info_text: alert_data.info_text,
             buttons: button_titles,
+            show_dont_ask_again: alert_data.show_dont_ask_again,
         };
 
         let response_data = PlatformModalResponseData {

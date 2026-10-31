@@ -10,6 +10,8 @@ pub struct AlertDialog {
     pub info_text: String,
     /// Each item is a button, and the String is the text for the button.
     pub buttons: Vec<String>,
+    /// Whether the alert has a "Don't ask again" checkbox.
+    pub show_dont_ask_again: bool,
 }
 
 impl AlertDialog {
@@ -22,6 +24,7 @@ impl AlertDialog {
             message_text: message_text.into(),
             info_text: info_text.into(),
             buttons: buttons.iter().map(|s| String::from(*s)).collect(),
+            show_dont_ask_again: true,
         }
     }
 }
@@ -39,6 +42,16 @@ pub struct AlertDialogWithCallbacks<F> {
     /// Callback to run if the user clicks the "don't ask again" checkbox. This should prevent that
     /// type of modal in the future.
     pub on_disable: F,
+    /// Whether to offer that checkbox at all.
+    pub show_dont_ask_again: bool,
+}
+
+impl<F> AlertDialogWithCallbacks<F> {
+    /// Without the "don't ask again" checkbox, for one-off questions.
+    pub fn without_dont_ask_again(mut self) -> Self {
+        self.show_dont_ask_again = false;
+        self
+    }
 }
 
 /// Wraps the button text with its click handler.
@@ -88,6 +101,7 @@ impl AlertDialogWithCallbacks<AppModalCallback> {
             info_text: info_text.into(),
             button_data,
             on_disable: Box::new(on_disable),
+            show_dont_ask_again: true,
         }
     }
 }
@@ -124,6 +138,7 @@ impl<V: View> AlertDialogWithCallbacks<ViewModalCallback<V>> {
             info_text: info_text.into(),
             button_data,
             on_disable: Box::new(on_disable),
+            show_dont_ask_again: true,
         }
     }
 }

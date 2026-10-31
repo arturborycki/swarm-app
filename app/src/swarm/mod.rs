@@ -117,6 +117,27 @@ pub fn group_key(group: &crate::workspace::tab_group::TabGroup) -> String {
     group.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", group.id.0))
 }
 
+/// True the first time Swarm runs (for this state dir), and only once: the
+/// first-run sheet is shown then. Records that it ran.
+pub fn claim_first_run() -> bool {
+    #[cfg(unix)]
+    {
+        let marker = swarm_client_state_dir().join("first-run-done");
+        if marker.exists() {
+            return false;
+        }
+        let _ = std::fs::create_dir_all(swarm_client_state_dir());
+        return std::fs::write(&marker, b"").is_ok();
+    }
+    #[cfg(not(unix))]
+    false
+}
+
+#[cfg(unix)]
+fn swarm_client_state_dir() -> std::path::PathBuf {
+    warp_terminal::local_tty::daemon::state_dir()
+}
+
 static REMOTE_TABS_CLAIMED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// True only for the first caller in this run: remote sessions are reopened

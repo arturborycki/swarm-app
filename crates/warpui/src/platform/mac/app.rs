@@ -38,6 +38,7 @@ pub fn create_native_platform_modal(dialog: AlertDialog) -> Retained<NSAlert> {
     for title in dialog.buttons {
         alert.addButtonWithTitle(&NSString::from_str(&title));
     }
+    alert.setShowsSuppressionButton(dialog.show_dont_ask_again);
     alert
 }
 

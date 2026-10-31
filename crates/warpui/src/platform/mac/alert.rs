@@ -11,8 +11,6 @@ pub extern "C-unwind" fn configureAndRunModal(
     alert: &NSAlert,
     app: &NSApplication,
 ) -> NSModalResponse {
-    alert.setShowsSuppressionButton(true);
-
     // It is generally frowned-upon to be overly assertive about putting our windows in
     // the user's face. However, it is reasonable to do this before showing our modal. If
     // we don't make ourselves the top active app, our modal might show up behind another

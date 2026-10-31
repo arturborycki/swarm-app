@@ -811,6 +811,11 @@ pub async fn install_swarmd(host: &str) -> Result<()> {
     Ok(())
 }
 
+/// Swarm's state dir (`SWARM_STATE_DIR` or the platform default).
+pub fn state_dir() -> std::path::PathBuf {
+    swarm_client::swarm_proto::paths::state_dir()
+}
+
 /// Hosts the user has connected to, oldest first, stored in Swarm's state
 /// dir so their sessions can be reopened at launch.
 fn known_hosts_file() -> std::path::PathBuf {

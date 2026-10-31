@@ -4105,6 +4105,13 @@ impl Workspace {
             && crate::swarm::claim_remote_tab_reopen()
         {
             self.reopen_remote_tabs(ctx);
+            if crate::swarm::claim_first_run() {
+                // Once the window is up.
+                let _ = ctx.spawn(
+                    async { warpui::r#async::Timer::after(std::time::Duration::from_millis(600)).await },
+                    |me, _, ctx| me.show_swarm_first_run(ctx),
+                );
+            }
         }
         match workspace_setting {
             NewWorkspaceSource::Reattach { tabs } => {
@@ -6363,8 +6370,43 @@ impl Workspace {
         ctx.notify();
     }
 
+    /// The first-run sheet (DESIGN §3a): what Swarm does differently, when the
+    /// session daemon starts, and an optional first remote host.
+    #[cfg(unix)]
+    fn show_swarm_first_run(&mut self, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let dialog = AlertDialogWithCallbacks::for_view(
+            "Welcome to Swarm",
+            "Every tab is a session kept by a background daemon, on this Mac or on a server. \
+             Closing a tab or quitting Swarm doesn't stop your sessions: they keep running and \
+             come back when you open Swarm. Use exit in the shell to end one.\n\n\
+             When should the session daemon start? You can change this in Settings → Daemon.",
+            vec![
+                ModalButton::for_view("With Swarm (Recommended)", |_, _| {}),
+                ModalButton::for_view("When I Log In", |me: &mut Self, ctx| {
+                    let Some(daemons) = daemon::daemons() else { return };
+                    let rx = daemons.run(async { daemon::set_start_at_login(None, true).await });
+                    let _ = ctx.spawn(async move { rx.recv().await }, |me, result, ctx| {
+                        if let Ok(Err(e)) = result {
+                            me.swarm_alert("Couldn't set the daemon to start at login", format!("{e:#}"), ctx);
+                        }
+                    });
+                    let _ = me;
+                }),
+                ModalButton::for_view("Connect to a Server…", |me: &mut Self, ctx| me.show_swarm_hosts_menu(ctx)),
+            ],
+            |_, _| {},
+        )
+        .without_dont_ask_again();
+        ctx.show_native_platform_modal(dialog);
+    }
+
+    #[cfg(not(unix))]
+    fn show_swarm_first_run(&mut self, _ctx: &mut ViewContext<Self>) {}
+
     fn swarm_alert(&mut self, title: impl Into<String>, text: impl Into<String>, ctx: &mut ViewContext<Self>) {
-        let dialog = AlertDialogWithCallbacks::for_view(title, text, vec![ModalButton::for_view("OK", |_, _| {})], |_, _| {});
+        let dialog = AlertDialogWithCallbacks::for_view(title, text, vec![ModalButton::for_view("OK", |_, _| {})], |_, _| {})
+            .without_dont_ask_again();
         ctx.show_native_platform_modal(dialog);
     }
 
@@ -6414,7 +6456,8 @@ impl Workspace {
                         ModalButton::for_view("Cancel", |_, _| {}),
                     ],
                     |_, _| {},
-                );
+                )
+                .without_dont_ask_again();
                 ctx.show_native_platform_modal(dialog);
             }
             Ok(HostCheck::NeedsInstall { os, installable: false }) => me.swarm_alert(
