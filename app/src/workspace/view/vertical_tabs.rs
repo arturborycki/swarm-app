@@ -3447,16 +3447,7 @@ fn swarm_session_status(terminal_view: &TerminalView, app: &AppContext) -> Optio
 fn swarm_session_icon(terminal_view: &TerminalView, theme: &WarpTheme, app: &AppContext) -> Option<IconWithStatusVariant> {
     #[cfg(unix)]
     {
-        use crate::swarm::sessions::SessionMark;
-        let status = swarm_session_status(terminal_view, app)?;
-        let colors = theme.terminal_colors().normal;
-        let (icon, icon_color): (WarpIcon, WarpThemeFill) = match status.mark {
-            SessionMark::Idle => (WarpIcon::CircleFilled, colors.blue.into()),
-            SessionMark::Busy => (WarpIcon::CircleHalf, colors.blue.into()),
-            SessionMark::Attention => (WarpIcon::AlertCircle, colors.red.into()),
-            SessionMark::Exited => (WarpIcon::CircleRing, theme.disabled_ui_text_color().into()),
-            SessionMark::Reconnecting => (WarpIcon::Refresh, colors.yellow.into()),
-        };
+        let (icon, icon_color) = swarm_session_status(terminal_view, app)?.mark.icon(theme);
         return Some(IconWithStatusVariant::Neutral { icon, icon_color });
     }
     #[cfg(not(unix))]

@@ -1046,6 +1046,8 @@ enum Indicator {
         conversation_status: Option<ConversationStatus>,
     },
     AmbientAgent,
+    /// swarm-term: the tab's daemon session state (● ◐ ! ○ ⟳).
+    SwarmSession { icon: Icon, color: ThemeFill },
 }
 
 impl From<TerminalViewState> for Indicator {
@@ -1205,6 +1207,14 @@ impl<'a> TabComponent<'a> {
         let has_active_pane_state_indicator = !(matches!(pane_state_indicator, Indicator::None));
         let is_maximized = tab.pane_group.as_ref(ctx).is_focused_pane_maximized(ctx);
         let shell_indicator_type = tab.pane_group.as_ref(ctx).focused_shell_indicator_type(ctx);
+        // swarm-term: an idle session's mark yields to other indicators; any
+        // other state is shown over them.
+        let swarm_mark = Self::swarm_session_mark(tab, ctx);
+        let swarm_indicator = |mark: crate::swarm::sessions::SessionMark| {
+            let (icon, color) = mark.icon(appearance.theme());
+            Indicator::SwarmSession { icon, color }
+        };
+        let swarm_busy = swarm_mark.filter(|m| *m != crate::swarm::sessions::SessionMark::Idle);
 
         // If a session is being shared, we want to show that indicator in the tab bar above all else.
         // Otherwise, if the tab indicator setting is explicitly turned off, we don't want to show any indicator.
@@ -1223,12 +1233,16 @@ impl<'a> TabComponent<'a> {
             Indicator::Synced
         } else if let Some(agent) = Self::agent_indicator(tab, ctx) {
             agent
+        } else if let Some(mark) = swarm_busy {
+            swarm_indicator(mark)
         } else if let Some(shell_indicator_type) = shell_indicator_type {
             Indicator::Shell(shell_indicator_type)
         } else if has_active_pane_state_indicator {
             pane_state_indicator
         } else if is_maximized {
             Indicator::Maximized
+        } else if let Some(mark) = swarm_mark {
+            swarm_indicator(mark)
         } else {
             Indicator::None
         };
@@ -1310,6 +1324,23 @@ impl<'a> TabComponent<'a> {
     /// or `None` if there is no non-empty, non-passive conversation to display.
     /// When a shell command is long-running the status is overridden to
     /// `InProgress`, matching vertical-tab behavior.
+    /// The state of the daemon session in the tab's focused terminal.
+    fn swarm_session_mark(tab: &TabData, app: &AppContext) -> Option<crate::swarm::sessions::SessionMark> {
+        #[cfg(unix)]
+        {
+            let terminal_view = tab.pane_group.as_ref(app).focused_session_view(app)?;
+            let id = terminal_view.as_ref(app).active_block_session_id()?;
+            return crate::swarm::sessions::SwarmSessions::as_ref(app)
+                .status_for(id.as_u64())
+                .map(|status| status.mark);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = (tab, app);
+            None
+        }
+    }
+
     fn agent_indicator(tab: &TabData, app: &AppContext) -> Option<Indicator> {
         let terminal_view = tab.pane_group.as_ref(app).focused_session_view(app)?;
         let terminal_view_ref = terminal_view.as_ref(app);
@@ -1660,6 +1691,7 @@ impl<'a> TabComponent<'a> {
                 .finish(),
             ),
             Indicator::None => None,
+            Indicator::SwarmSession { icon, color } => Some(icon.to_warpui_icon(*color).finish()),
             Indicator::Synced => Some(
                 Icon::LinkHorizontal
                     .to_warpui_icon(self.styles.synced_input_indicator_color.into())

@@ -36,6 +36,24 @@ pub enum SessionMark {
     Reconnecting,
 }
 
+impl SessionMark {
+    /// The mark's shape and color, as tabs and sidebar rows draw it.
+    pub fn icon(
+        self,
+        theme: &warp_core::ui::theme::WarpTheme,
+    ) -> (warp_core::ui::Icon, warp_core::ui::theme::Fill) {
+        use warp_core::ui::Icon;
+        let colors = theme.terminal_colors().normal;
+        match self {
+            SessionMark::Idle => (Icon::CircleFilled, colors.blue.into()),
+            SessionMark::Busy => (Icon::CircleHalf, colors.blue.into()),
+            SessionMark::Attention => (Icon::AlertCircle, colors.red.into()),
+            SessionMark::Exited => (Icon::CircleRing, theme.disabled_ui_text_color().into()),
+            SessionMark::Reconnecting => (Icon::Refresh, colors.yellow.into()),
+        }
+    }
+}
+
 /// What a tab shows for its daemon session.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionStatus {
