@@ -2,9 +2,10 @@
 //! watchers so the title bar, sidebar and session menus can render them. The
 //! local daemon is always watched; a remote host once the user connects to it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use warp_terminal::local_tty::daemon::{self, DaemonSession};
+use warpui::accessibility::{AccessibilityContent, WarpA11yRole};
 use warpui::{Entity, ModelContext, SingletonEntity};
 
 type Host = Option<String>;
@@ -14,6 +15,8 @@ pub struct SwarmSessions {
     /// Things the user should look at (sessions that failed, connections that
     /// were lost), by (host, session id): what to tell them.
     attention: BTreeMap<(Host, String), String>,
+    /// Daemon session ids whose tab is reconnecting, as last announced.
+    reconnecting: BTreeSet<String>,
     tx: async_channel::Sender<(Host, Vec<DaemonSession>)>,
 }
 
@@ -28,6 +31,18 @@ pub enum SessionMark {
     AttachedElsewhere,
     /// The tab lost its connection to the daemon and is retrying.
     Reconnecting,
+}
+
+impl SessionMark {
+    /// The mark in words, for VoiceOver (the sidebar only shows a colored dot).
+    pub fn spoken(self) -> &'static str {
+        match self {
+            SessionMark::Busy => "running a command",
+            SessionMark::Exited => "ended",
+            SessionMark::AttachedElsewhere => "also open elsewhere",
+            SessionMark::Reconnecting => "reconnecting",
+        }
+    }
 }
 
 pub enum SwarmSessionsEvent {
@@ -45,14 +60,19 @@ impl SwarmSessions {
         daemon::on_link_change(move || {
             let _ = link_tx.try_send(());
         });
-        let _ = ctx.spawn_stream_local(link_rx, |_, _, ctx| ctx.emit(SwarmSessionsEvent::Changed), |_, _| {});
+        let _ = ctx.spawn_stream_local(link_rx, |me, _, ctx| me.on_link_change(ctx), |_, _| {});
         // Tabs that gave up reconnecting.
         let (lost_tx, lost_rx) = async_channel::unbounded::<(Host, String)>();
         daemon::on_link_lost(move |host, id| {
             let _ = lost_tx.try_send((host, id));
         });
         let _ = ctx.spawn_stream_local(lost_rx, Self::on_link_lost, |_, _| {});
-        let me = SwarmSessions { by_host: BTreeMap::new(), attention: BTreeMap::new(), tx };
+        let me = SwarmSessions {
+            by_host: BTreeMap::new(),
+            attention: BTreeMap::new(),
+            reconnecting: BTreeSet::new(),
+            tx,
+        };
         if super::use_daemon_sessions() {
             me.start_watching(None);
         }
@@ -107,6 +127,7 @@ impl SwarmSessions {
         });
         self.by_host.insert(host, sessions);
         for (title, body) in news {
+            announce(format!("{title}: {body}"), ctx);
             ctx.emit(SwarmSessionsEvent::Attention { title, body });
         }
         ctx.emit(SwarmSessionsEvent::Changed);
@@ -122,8 +143,39 @@ impl SwarmSessions {
             .unwrap_or_else(|| "A session".to_string());
         let body = format!("{name} on {place}: couldn't reconnect. It may still be running there.");
         self.attention.insert((host, id), body.clone());
+        announce(format!("Connection lost: {body}"), ctx);
         ctx.emit(SwarmSessionsEvent::Attention { title: "Connection lost".to_string(), body });
         ctx.emit(SwarmSessionsEvent::Changed);
+    }
+
+    /// Tabs started or stopped reconnecting: tell VoiceOver which.
+    fn on_link_change(&mut self, ctx: &mut ModelContext<Self>) {
+        let now: BTreeSet<String> = daemon::reconnecting_sessions().into_iter().collect();
+        for id in now.difference(&self.reconnecting) {
+            announce(format!("{} lost its connection; reconnecting", self.spoken_name(id)), ctx);
+        }
+        for id in self.reconnecting.difference(&now) {
+            // A tab that gave up is announced as a lost connection instead.
+            if !self.attention.keys().any(|(_, a)| a == id) {
+                announce(format!("{} reconnected", self.spoken_name(id)), ctx);
+            }
+        }
+        self.reconnecting = now;
+        ctx.emit(SwarmSessionsEvent::Changed);
+    }
+
+    fn spoken_name(&self, id: &str) -> String {
+        self.by_host
+            .iter()
+            .find_map(|(host, sessions)| {
+                let s = sessions.iter().find(|s| s.id == id)?;
+                let name = s.name.clone().unwrap_or_else(|| s.title.clone());
+                Some(match host {
+                    Some(h) => format!("{name} on {h}"),
+                    None => name,
+                })
+            })
+            .unwrap_or_else(|| "A session".to_string())
     }
 
     /// How many things need the user's attention (the Dock badge).
@@ -176,3 +228,8 @@ impl Entity for SwarmSessions {
 }
 
 impl SingletonEntity for SwarmSessions {}
+
+/// Has VoiceOver read `text` out (a no-op when no screen reader is running).
+fn announce(text: String, ctx: &mut ModelContext<SwarmSessions>) {
+    ctx.emit_a11y_content(AccessibilityContent::new_without_help(text, WarpA11yRole::UserAction));
+}

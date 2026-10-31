@@ -6671,6 +6671,30 @@ impl Workspace {
     #[cfg(not(unix))]
     fn sync_swarm_tab_names(&mut self, _ctx: &mut ViewContext<Self>) {}
 
+    /// The active tab for VoiceOver: "build, tab 2 of 5, running a command".
+    fn spoken_active_tab(&self, ctx: &AppContext) -> String {
+        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+        let mut text = format!(
+            "{}, tab {} of {}",
+            pane_group.display_title(ctx),
+            self.active_tab_index + 1,
+            self.tab_count()
+        );
+        #[cfg(unix)]
+        {
+            let mark = pane_group
+                .terminal_views(ctx)
+                .first()
+                .and_then(|view| view.as_ref(ctx).active_block_session_id())
+                .and_then(|id| crate::swarm::sessions::SwarmSessions::as_ref(ctx).mark_for(id.as_u64()));
+            if let Some(mark) = mark {
+                text.push_str(", ");
+                text.push_str(mark.spoken());
+            }
+        }
+        text
+    }
+
     /// Activates the tab showing `tab`'s session, if one does; returns whether it did.
     pub fn swarm_focus_session(&mut self, tab: &crate::swarm::ReattachTab, ctx: &mut ViewContext<Self>) -> bool {
         let Some(warp_id) = tab.warp_session_id else { return false };
@@ -24745,12 +24769,24 @@ impl TypedActionView for Workspace {
     fn action_accessibility_contents(
         &mut self,
         action: &WorkspaceAction,
-        _: &mut ViewContext<Self>,
+        ctx: &mut ViewContext<Self>,
     ) -> ActionAccessibilityContent {
         match action {
             WorkspaceAction::SetA11yVerbosityLevel(verbosity) => {
                 ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
                     format!("{verbosity:?} accessibility announcements set"),
+                    WarpA11yRole::UserAction,
+                ))
+            }
+            WorkspaceAction::ActivateTab(_)
+            | WorkspaceAction::ActivateTabByNumber(_)
+            | WorkspaceAction::ActivatePrevTab
+            | WorkspaceAction::ActivateNextTab
+            | WorkspaceAction::ActivateLastTab
+                if crate::swarm::SWARM_CHROME =>
+            {
+                ActionAccessibilityContent::Custom(AccessibilityContent::new_without_help(
+                    self.spoken_active_tab(ctx),
                     WarpA11yRole::UserAction,
                 ))
             }

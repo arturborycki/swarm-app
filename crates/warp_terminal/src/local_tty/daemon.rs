@@ -621,6 +621,11 @@ pub fn is_reconnecting(id: &str) -> bool {
     RECONNECTING.lock().unwrap().contains(id)
 }
 
+/// Daemon session ids whose tab is reconnecting.
+pub fn reconnecting_sessions() -> Vec<String> {
+    RECONNECTING.lock().unwrap().iter().cloned().collect()
+}
+
 fn set_reconnecting(id: &str, on: bool) {
     let changed = {
         let mut set = RECONNECTING.lock().unwrap();
