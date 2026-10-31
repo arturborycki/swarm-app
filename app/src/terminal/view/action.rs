@@ -309,6 +309,10 @@ pub enum TerminalAction {
         source: SharedSessionActionSource,
     },
     VimModeBanner(VimModeBannerAction),
+    /// swarm-term: start a new daemon session in place of this ended one.
+    SwarmRestartSession,
+    /// swarm-term: close the tab of this ended daemon session.
+    SwarmCloseEndedSession,
     ToggleSnackbarInActivePane,
     MakeAllParticipantsReaders {
         reason: RoleUpdateReason,
@@ -639,6 +643,8 @@ impl fmt::Debug for TerminalAction {
             OpenShareSessionModal { source } => write!(f, "OpenShareSessionModal({source:?})"),
             CopySharedSessionLink { .. } => f.write_str("CopySharedSessionLink"),
             VimModeBanner(action) => write!(f, "VimModeBanner({action:?})"),
+            SwarmRestartSession => f.write_str("SwarmRestartSession"),
+            SwarmCloseEndedSession => f.write_str("SwarmCloseEndedSession"),
             ToggleSnackbarInActivePane => write!(f, "ToggleSnackbarInActivePane"),
             MakeAllParticipantsReaders { reason } => {
                 write!(f, "MakeAllParticipantsReaders {{ reason: {reason:?} }}")

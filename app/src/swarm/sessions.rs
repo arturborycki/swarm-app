@@ -293,6 +293,16 @@ impl SwarmSessions {
         })
     }
 
+    /// The session behind a terminal and its host, by Warp session id.
+    pub fn session_for(&self, warp_session_id: u64) -> Option<(Host, &DaemonSession)> {
+        self.by_host.iter().find_map(|(host, sessions)| {
+            let s = sessions.iter().find(|s| {
+                s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id)
+            })?;
+            Some((host.clone(), s))
+        })
+    }
+
     /// The daemon's id for the session behind a terminal, by Warp session id.
     pub fn daemon_id_for(&self, warp_session_id: u64) -> Option<String> {
         self.by_host

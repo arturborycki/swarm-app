@@ -139,6 +139,9 @@ pub enum WorkspaceAction {
     SwarmNewSession { host: Option<String> },
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
+    /// swarm-term: replace the ended daemon session behind this Warp session
+    /// with a new one (same folder, name and group) in a new tab.
+    SwarmRestartSession(u64),
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1145,6 +1148,7 @@ impl WorkspaceAction {
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
             | SwarmRetryConnections
+            | SwarmRestartSession(_)
             | Reauth
             | SignupAnonymousUser
             | LogOut

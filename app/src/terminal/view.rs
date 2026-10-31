@@ -97,7 +97,7 @@ use inline_banner::{
     render_aws_cli_not_installed_banner, render_inline_notifications_discovery_banner,
     render_inline_notifications_error_banner, render_inline_shared_session_ended_banner,
     render_inline_shared_session_started_banner, render_open_in_warp_banner,
-    render_shell_process_terminated_banner, render_vim_mode_banner,
+    render_shell_process_terminated_banner, render_swarm_session_ended_banner, render_vim_mode_banner,
 };
 pub use inline_banner::{NotificationsDiscoveryBannerAction, NotificationsErrorBannerAction};
 use instant::Instant;
@@ -995,6 +995,16 @@ pub enum NotificationsDiscoveryBanner {
 struct ShellProcessTerminatedBanner {
     banner_id: InlineBannerId,
     was_premature_termination: bool,
+    /// swarm-term: the daemon session ended with an error, so the tab stays
+    /// open showing how, with Restart and Close.
+    swarm_session_ended: Option<SwarmSessionEnded>,
+}
+
+struct SwarmSessionEnded {
+    /// "exit 1", "signal 9".
+    detail: String,
+    restart_mouse_state: MouseStateHandle,
+    close_mouse_state: MouseStateHandle,
 }
 
 #[derive(Debug, Clone)]
@@ -11476,6 +11486,7 @@ impl TerminalView {
                 Some(ShellProcessTerminatedBanner {
                     banner_id,
                     was_premature_termination: !self.is_login_shell_bootstrapped,
+                    swarm_session_ended: None,
                 });
             // In this case, the active block is actually the last block that was run
             // before exiting; it's not a special hidden block. In other words, the "active" block
@@ -12664,6 +12675,18 @@ impl TerminalView {
                         },
                         ctx,
                     );
+                    let swarm_detail = self
+                        .active_block_session_id()
+                        .and_then(|id| crate::swarm::session_ended_with_error(id.as_u64(), reason, ctx));
+                    if let (Some(detail), Some(banner)) =
+                        (swarm_detail, self.inline_banners_state.shell_process_terminated_banner.as_mut())
+                    {
+                        banner.swarm_session_ended = Some(SwarmSessionEnded {
+                            detail,
+                            restart_mouse_state: Default::default(),
+                            close_mouse_state: Default::default(),
+                        });
+                    }
                 }
                 // Mark the editor as disabled to ensure user interactions with
                 // it are ignored.
@@ -16993,6 +17016,24 @@ impl TerminalView {
 
     pub fn is_login_shell_bootstrapped(&self) -> bool {
         self.is_login_shell_bootstrapped
+    }
+
+    /// swarm-term: the daemon session ended with an error and its tab stays
+    /// open to show that (until Restart or Close).
+    pub fn keeps_tab_after_exit(&self) -> bool {
+        self.inline_banners_state
+            .shell_process_terminated_banner
+            .as_ref()
+            .is_some_and(|banner| banner.swarm_session_ended.is_some())
+    }
+
+    /// swarm-term: closes the pane of a daemon session that ended with an error.
+    pub fn close_ended_swarm_session(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(banner) = self.inline_banners_state.shell_process_terminated_banner.as_mut()
+            && banner.swarm_session_ended.take().is_some()
+        {
+            ctx.emit(Event::Exited);
+        }
     }
     pub fn has_pending_command_or_awaiting_completion(&self, ctx: &AppContext) -> bool {
         self.awaiting_pending_command_completion
@@ -25189,12 +25230,19 @@ impl TerminalView {
         if let Some(ShellProcessTerminatedBanner {
             banner_id,
             was_premature_termination,
-        }) = self.inline_banners_state.shell_process_terminated_banner
+            swarm_session_ended,
+        }) = &self.inline_banners_state.shell_process_terminated_banner
         {
-            inline_banners.insert(
-                banner_id,
-                render_shell_process_terminated_banner(appearance, was_premature_termination),
-            );
+            let banner = match swarm_session_ended {
+                Some(ended) => render_swarm_session_ended_banner(
+                    appearance,
+                    &ended.detail,
+                    ended.restart_mouse_state.clone(),
+                    ended.close_mouse_state.clone(),
+                ),
+                None => render_shell_process_terminated_banner(appearance, *was_premature_termination),
+            };
+            inline_banners.insert(*banner_id, banner);
         }
 
         if (FeatureFlag::CreatingSharedSessions.is_enabled()
@@ -27801,6 +27849,8 @@ impl TypedActionView for TerminalView {
             | OpenBlockListContextMenu
             | AliasExpansionBanner(_)
             | VimModeBanner(_)
+            | SwarmRestartSession
+            | SwarmCloseEndedSession
             | InsertMostRecentCommandCorrection
             | StopSharingCurrentSession { .. }
             | RequestSharedSessionRole(_)
@@ -28316,6 +28366,12 @@ impl TypedActionView for TerminalView {
                 self.open_block_filter_editor(*block_index, OpenedFromClick::Yes, ctx)
             }
             VimModeBanner(action) => self.handle_vim_banner_action(*action, ctx),
+            SwarmRestartSession => {
+                if let Some(id) = self.active_block_session_id() {
+                    ctx.dispatch_typed_action(&WorkspaceAction::SwarmRestartSession(id.as_u64()));
+                }
+            }
+            SwarmCloseEndedSession => self.close_ended_swarm_session(ctx),
             OnboardingFlow(version) => {
                 // Don't show onboarding if it's already active or if this is a shared session or if user is anonymous
                 if self

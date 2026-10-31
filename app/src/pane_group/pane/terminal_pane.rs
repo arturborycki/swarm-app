@@ -981,10 +981,14 @@ fn handle_terminal_view_event(
                 // keep the pane open.  There might be useful information visible
                 // in the output, and if this was the first shell spawned when the
                 // user started the app, it will prevent it from suddenly quitting.
+                // swarm-term: nor does a daemon session that ended with an error,
+                // until the user restarts or closes it.
                 if group
                     .terminal_view_from_pane_id(terminal_pane_id, ctx)
                     .is_some_and(|terminal_view| {
-                        !terminal_view.as_ref(ctx).is_login_shell_bootstrapped()
+                        let terminal_view = terminal_view.as_ref(ctx);
+                        !terminal_view.is_login_shell_bootstrapped()
+                            || terminal_view.keeps_tab_after_exit()
                     })
                 {
                     return;

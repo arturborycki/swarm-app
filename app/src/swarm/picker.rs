@@ -3,9 +3,9 @@
 //! type. Open one, several or all of them, start a new one, or terminate them.
 //!
 //! Keys: ↑↓ move, Space (with an empty filter) or ⇧↩ select, ↩ open the
-//! selection (or the highlighted row), ⌘↩ open every match, Esc close. A
-//! row's right-click menu renames it, copies its attach command or
-//! terminates it.
+//! selection (or the highlighted row), ⌘↩ open every match, ⌘⌫ (with an
+//! empty filter) terminate them, Esc close. A row's right-click menu renames
+//! it, copies its attach command or terminates it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -116,6 +116,10 @@ impl SwarmPicker {
                 me.cursor = 0;
                 ctx.notify();
             }
+            // ⌘⌫ in an empty filter terminates the selection (or the highlighted
+            // row). The editor reports it before the edit, so `query` is still
+            // the text it had.
+            EditorEvent::DeleteAllLeft if me.query.is_empty() => me.terminate_selected(ctx),
             EditorEvent::Navigate(NavigationKey::Up) => me.move_cursor(-1, ctx),
             EditorEvent::Navigate(NavigationKey::Down) => me.move_cursor(1, ctx),
             EditorEvent::ShiftEnter => me.toggle_cursor_row(ctx),
@@ -249,6 +253,16 @@ impl SwarmPicker {
     fn open_all(&mut self, ctx: &mut ViewContext<Self>) {
         let rows = self.rows(ctx);
         self.open(rows, ctx);
+    }
+
+    /// Terminates the checked rows, or the highlighted one, after a confirmation.
+    fn terminate_selected(&mut self, ctx: &mut ViewContext<Self>) {
+        let ids = if self.selected.is_empty() {
+            self.rows(ctx).get(self.cursor).map(|row| BTreeSet::from([row.id.clone()])).unwrap_or_default()
+        } else {
+            self.selected.clone()
+        };
+        self.terminate(&ids, ctx);
     }
 
     /// Terminates `ids` (of the listed sessions) after a confirmation.
@@ -711,7 +725,7 @@ impl View for SwarmPicker {
             .with_padding_bottom(10.)
             .finish();
         let hint = self.note.clone().unwrap_or_else(|| {
-            "↑↓ move · Space or ⇧↩ select · ↩ open · ⌘↩ open all matches · right-click for Rename, Copy attach command"
+            "↑↓ move · Space or ⇧↩ select · ↩ open · ⌘↩ open all matches · ⌘⌫ terminate · right-click for more"
                 .to_string()
         });
         let hint = Container::new(text(hint, 11., sub))

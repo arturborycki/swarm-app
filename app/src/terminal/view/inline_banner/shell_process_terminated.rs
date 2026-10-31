@@ -1,10 +1,66 @@
 use warpui::Element;
 use warpui::elements::Text;
 
+use warpui::elements::MouseStateHandle;
+
 use super::{
-    InlineBannerContent, InlineBannerIcon, InlineBannerStyle, render_inline_block_list_banner,
+    InlineBannerButtonState, InlineBannerContent, InlineBannerIcon, InlineBannerStyle,
+    InlineBannerTextButton, InlineBannerTextButtonVariant, render_inline_block_list_banner,
 };
 use crate::appearance::Appearance;
+use crate::terminal::view::TerminalAction;
+
+/// swarm-term: a daemon session that ended with an error ("exit 1"), with
+/// Restart (a new session in its place) and Close.
+pub fn render_swarm_session_ended_banner(
+    appearance: &Appearance,
+    detail: &str,
+    restart: MouseStateHandle,
+    close: MouseStateHandle,
+) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let text_color = theme.active_ui_text_color().into_solid();
+    let button = |text: &str, on_click_event, mouse_state_handle, variant| InlineBannerTextButton {
+        text: text.to_string(),
+        text_color,
+        button_state: InlineBannerButtonState { on_click_event, mouse_state_handle },
+        font: Default::default(),
+        position_id: None,
+        variant,
+    };
+    render_inline_block_list_banner(
+        InlineBannerStyle::LowPriority,
+        appearance,
+        InlineBannerContent {
+            title: format!("Session ended ({detail})"),
+            header_icon: Some(InlineBannerIcon {
+                asset_path: "bundled/svg/warning.svg",
+                aspect_ratio: 1.,
+                color_override: Some(theme.ui_error_color()),
+            }),
+            content: Some(vec![Text::new(
+                "Restart starts a new session in the same folder.",
+                appearance.ui_font_family(),
+                appearance.ui_font_size(),
+            )]),
+            buttons: vec![
+                button(
+                    "Restart",
+                    TerminalAction::SwarmRestartSession,
+                    restart,
+                    InlineBannerTextButtonVariant::Primary,
+                ),
+                button(
+                    "Close",
+                    TerminalAction::SwarmCloseEndedSession,
+                    close,
+                    InlineBannerTextButtonVariant::Secondary,
+                ),
+            ],
+            ..Default::default()
+        },
+    )
+}
 
 pub fn render_shell_process_terminated_banner(
     appearance: &Appearance,

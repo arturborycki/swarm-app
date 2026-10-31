@@ -148,6 +148,37 @@ pub fn pane_group_is_remote(pane_group: &crate::pane_group::PaneGroup, app: &war
     }
 }
 
+/// How the daemon session behind a terminal ended ("exit 1", "signal 9"),
+/// when it ended with an error that the user didn't cause by terminating it:
+/// its tab then stays open, showing that with Restart and Close.
+#[cfg(unix)]
+pub fn session_ended_with_error(
+    warp_session_id: u64,
+    reason: &warp_terminal::event::ExitReason,
+    app: &warpui::AppContext,
+) -> Option<String> {
+    use warp_terminal::event::{ExitReason, ObservedExitStatus};
+    use warpui::SingletonEntity as _;
+    let detail = match reason {
+        ExitReason::ShellProcessExited { status: ObservedExitStatus::Code(code) } if *code != 0 => {
+            format!("exit {code}")
+        }
+        ExitReason::ShellProcessExited { status: ObservedExitStatus::Signal(signal) } => format!("signal {signal}"),
+        _ => return None,
+    };
+    let id = sessions::SwarmSessions::as_ref(app).daemon_id_for(warp_session_id)?;
+    (!warp_terminal::local_tty::daemon::was_terminated(&id)).then_some(detail)
+}
+
+#[cfg(not(unix))]
+pub fn session_ended_with_error(
+    _warp_session_id: u64,
+    _reason: &warp_terminal::event::ExitReason,
+    _app: &warpui::AppContext,
+) -> Option<String> {
+    None
+}
+
 /// The `META_GROUP` value for a tab group.
 pub fn group_key(group: &crate::workspace::tab_group::TabGroup) -> String {
     group.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", group.id.0))

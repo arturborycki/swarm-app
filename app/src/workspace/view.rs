@@ -6699,6 +6699,35 @@ impl Workspace {
         });
     }
 
+    /// Starts a new session in place of the ended one behind `warp_session_id`
+    /// and opens it; the ended session's tab closes once that worked.
+    #[cfg(unix)]
+    fn restart_swarm_session(&mut self, warp_session_id: u64, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let Some((host, old)) = crate::swarm::sessions::SwarmSessions::as_ref(ctx)
+            .session_for(warp_session_id)
+            .map(|(host, session)| (host, session.clone()))
+        else {
+            return;
+        };
+        let target = host.clone();
+        let rx = daemons.run(async move { daemon::restart_session(target.as_deref(), &old).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+            Ok(Ok(session)) => {
+                let ended = me.tabs.iter().flat_map(|tab| tab.pane_group.as_ref(ctx).terminal_views(ctx)).find(|view| {
+                    view.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) == Some(warp_session_id)
+                });
+                me.add_swarm_tab(&crate::swarm::ReattachTab::for_session(host.as_deref(), &session), ctx);
+                if let Some(ended) = ended {
+                    ended.update(ctx, |view, ctx| view.close_ended_swarm_session(ctx));
+                }
+            }
+            Ok(Err(e)) => me.swarm_alert("Couldn't restart the session".to_string(), format!("{e:#}"), ctx),
+            Err(_) => {}
+        });
+    }
+
     /// Shows the session picker on this Mac (or hides it if it's showing).
     #[cfg(unix)]
     fn toggle_swarm_picker(&mut self, ctx: &mut ViewContext<Self>) {
@@ -26297,6 +26326,10 @@ impl TypedActionView for Workspace {
                 self.add_swarm_tab(tab, ctx);
             }
             SwarmRetryConnections => crate::swarm::check_daemon_links(),
+            #[cfg(unix)]
+            SwarmRestartSession(warp_session_id) => self.restart_swarm_session(*warp_session_id, ctx),
+            #[cfg(not(unix))]
+            SwarmRestartSession(_) => {}
             ShowHeaderToolbarContextMenu { position } => {
                 self.show_header_toolbar_context_menu(*position, ctx);
             }

@@ -1137,6 +1137,32 @@ pub async fn remove_session(host: Option<&str>, id: &str) -> Result<()> {
     daemons.client(host).await?.remove(id).await
 }
 
+/// Starts a session in place of `old`, which has ended: in its folder, with
+/// its name and tab metadata, running its command (a shell this app started
+/// gets the default shell, as Warp's own setup goes into it on attach).
+/// `old` is then dropped.
+pub async fn restart_session(host: Option<&str>, old: &DaemonSession) -> Result<DaemonSession> {
+    let daemons = daemons().context("daemon sessions are off")?;
+    let mut ui = old.ui.clone();
+    ui.remove(META_SESSION_ID);
+    ui.insert(META_AUTO_ATTACH.to_string(), "true".to_string());
+    let started_here = old.ui.get(META_CREATED_BY).is_some_and(|by| by == "warp");
+    let opts = CreateOpts {
+        command: if started_here { Vec::new() } else { old.command.clone() },
+        cwd: old.cwd.clone(),
+        env: Vec::new(),
+        size: old.size,
+        name: old.name.clone(),
+        ui,
+    };
+    let client = daemons.client(host).await?;
+    let new = client.create(opts).await.context("create session")?;
+    if let Err(e) = client.remove(&old.id).await {
+        log::warn!("swarm: couldn't drop ended session {}: {e:#}", old.id);
+    }
+    Ok(new)
+}
+
 /// Where this Mac's daemon writes its logs.
 pub fn daemon_log_dir() -> std::path::PathBuf {
     swarm_client::swarm_proto::paths::log_dir()
