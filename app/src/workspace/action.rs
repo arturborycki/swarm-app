@@ -137,6 +137,8 @@ pub enum WorkspaceAction {
     SwarmConnectHost(String),
     /// swarm-term: start a session on a host (`None`: this Mac) and open it.
     SwarmNewSession { host: Option<String> },
+    /// swarm-term: retry lost remote connections now.
+    SwarmRetryConnections,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1142,6 +1144,7 @@ impl WorkspaceAction {
             | SwarmShowHostsMenu
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
+            | SwarmRetryConnections
             | Reauth
             | SignupAnonymousUser
             | LogOut

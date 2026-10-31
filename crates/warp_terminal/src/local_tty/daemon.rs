@@ -149,6 +149,7 @@ impl Daemons {
     /// a minute later). Tabs already retrying try again at once. For after
     /// sleep or a network change, when links are often dead but look open.
     pub fn check_links(&'static self) {
+        log::info!("swarm: checking remote links");
         LINKS_CHANGED.notify_waiters();
         self.rt.spawn(async move {
             let remotes: Vec<(String, Client)> = self

@@ -46,6 +46,7 @@ pub(super) struct WorkspaceMouseStates {
     pub(super) title_bar_search_bar: MouseStateHandle,
     pub(super) swarm_detached_button: MouseStateHandle,
     pub(super) swarm_connect_button: MouseStateHandle,
+    pub(super) swarm_retry_button: MouseStateHandle,
     pub(super) team_switcher_pill: MouseStateHandle,
     #[cfg(target_family = "wasm")]
     pub(super) warp_logo: MouseStateHandle,

@@ -21712,6 +21712,84 @@ impl Workspace {
         )
     }
 
+    /// swarm-term: over a session whose connection dropped: what is going on,
+    /// and a button to retry now rather than after the backoff.
+    #[cfg(unix)]
+    fn render_swarm_reconnecting_banner(&self, appearance: &Appearance, ctx: &AppContext) -> Option<Box<dyn Element>> {
+        use crate::swarm::sessions::SessionMark;
+        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+        let session_id = pane_group
+            .terminal_view_from_pane_id(pane_group.focused_pane_id(ctx), ctx)?
+            .as_ref(ctx)
+            .active_block_session_id()?;
+        let status = crate::swarm::sessions::SwarmSessions::as_ref(ctx).status_for(session_id.as_u64())?;
+        if status.mark != SessionMark::Reconnecting {
+            return None;
+        }
+        let place = status.host.unwrap_or_else(|| "this Mac's daemon".to_string());
+        let theme = appearance.theme();
+        let yellow: ColorU = theme.terminal_colors().normal.yellow.into();
+        let text_color = theme.main_text_color(theme.background());
+        let font = appearance.ui_font_family();
+        let message = Text::new_inline(
+            format!("Connection to {place} lost. Reconnecting — output will resume where it stopped."),
+            font,
+            13.,
+        )
+        .with_color(text_color.into())
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+        let retry = Hoverable::new(self.mouse_states.swarm_retry_button.clone(), move |state| {
+            Container::new(Text::new_inline("Retry Now", font, 12.).with_color(text_color.into()).finish())
+                .with_background(if state.is_hovered() {
+                    internal_colors::fg_overlay_3(theme)
+                } else {
+                    internal_colors::fg_overlay_2(theme)
+                })
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+                .with_padding_left(12.)
+                .with_padding_right(12.)
+                .with_padding_top(4.)
+                .with_padding_bottom(4.)
+                .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmRetryConnections))
+        .finish();
+        let row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(12.)
+            .with_child(
+                ConstrainedBox::new(Icon::Refresh.to_warpui_icon(yellow.into()).finish())
+                    .with_width(14.)
+                    .with_height(14.)
+                    .finish(),
+            )
+            .with_child(Shrinkable::new(1., message).finish())
+            .with_child(retry)
+            .finish();
+        Some(
+            Container::new(row)
+                .with_background(Fill::Solid(yellow).with_opacity(18))
+                .with_border(Border::all(1.).with_border_fill(Fill::Solid(yellow).with_opacity(50)))
+                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+                .with_padding_left(14.)
+                .with_padding_right(10.)
+                .with_padding_top(8.)
+                .with_padding_bottom(8.)
+                .with_margin_left(12.)
+                .with_margin_right(12.)
+                .with_margin_top(8.)
+                .finish(),
+        )
+    }
+
+    #[cfg(not(unix))]
+    fn render_swarm_reconnecting_banner(&self, _appearance: &Appearance, _ctx: &AppContext) -> Option<Box<dyn Element>> {
+        None
+    }
+
     #[cfg(not(unix))]
     fn render_swarm_status_bar(&self, _appearance: &Appearance, _ctx: &AppContext) -> Option<Box<dyn Element>> {
         None
@@ -23023,12 +23101,22 @@ impl Workspace {
             ChildView::new(&active_tab_data.pane_group).finish()
         };
 
-        let terminal_content = match self.maybe_render_workspace_banner(app, appearance) {
-            Some(banner_element) => Flex::column()
-                .with_child(banner_element)
+        let banners: Vec<_> = [
+            self.maybe_render_workspace_banner(app, appearance),
+            crate::swarm::SWARM_CHROME
+                .then(|| self.render_swarm_reconnecting_banner(appearance, app))
+                .flatten(),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+        let terminal_content = if banners.is_empty() {
+            active_content
+        } else {
+            Flex::column()
+                .with_children(banners)
                 .with_child(Shrinkable::new(1., active_content).finish())
-                .finish(),
-            None => active_content,
+                .finish()
         };
 
         let vertical_tabs_active =
@@ -26257,6 +26345,7 @@ impl TypedActionView for Workspace {
             SwarmReattach(tab) => {
                 self.add_swarm_tab(tab, ctx);
             }
+            SwarmRetryConnections => crate::swarm::check_daemon_links(),
             ShowHeaderToolbarContextMenu { position } => {
                 self.show_header_toolbar_context_menu(*position, ctx);
             }
