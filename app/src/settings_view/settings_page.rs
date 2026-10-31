@@ -132,6 +132,7 @@ pub enum SettingsPageViewHandle {
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
     SwarmDaemon(ViewHandle<super::swarm_pages::DaemonPageView>),
     SwarmHosts(ViewHandle<super::swarm_pages::HostsPageView>),
+    SwarmSessions(ViewHandle<super::swarm_pages::SessionsPageView>),
 }
 
 impl SettingsPageViewHandle {
@@ -162,6 +163,7 @@ impl SettingsPageViewHandle {
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
             SwarmDaemon(view_handle) => ChildView::new(view_handle).finish(),
             SwarmHosts(view_handle) => ChildView::new(view_handle).finish(),
+            SwarmSessions(view_handle) => ChildView::new(view_handle).finish(),
         }
     }
 }

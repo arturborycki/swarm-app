@@ -23,6 +23,8 @@ pub enum SessionMark {
     Exited,
     /// Another client (another window, `swarmctl attach`) is attached too.
     AttachedElsewhere,
+    /// The tab lost its connection to the daemon and is retrying.
+    Reconnecting,
 }
 
 pub enum SwarmSessionsEvent {
@@ -33,6 +35,12 @@ impl SwarmSessions {
     pub fn new(ctx: &mut ModelContext<Self>) -> Self {
         let (tx, rx) = async_channel::unbounded();
         let _ = ctx.spawn_stream_local(rx, Self::on_sessions, |_, _| {});
+        // Tabs losing and regaining their connection.
+        let (link_tx, link_rx) = async_channel::unbounded::<()>();
+        daemon::on_link_change(move || {
+            let _ = link_tx.try_send(());
+        });
+        let _ = ctx.spawn_stream_local(link_rx, |_, _, ctx| ctx.emit(SwarmSessionsEvent::Changed), |_, _| {});
         let me = SwarmSessions { by_host: BTreeMap::new(), tx };
         if super::use_daemon_sessions() {
             me.start_watching(None);
@@ -75,7 +83,9 @@ impl SwarmSessions {
         let session = self.by_host.values().flatten().find(|s| {
             s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id)
         })?;
-        if !session.is_running() {
+        if daemon::is_reconnecting(&session.id) {
+            Some(SessionMark::Reconnecting)
+        } else if !session.is_running() {
             Some(SessionMark::Exited)
         } else if session.clients.len() > 1 {
             Some(SessionMark::AttachedElsewhere)

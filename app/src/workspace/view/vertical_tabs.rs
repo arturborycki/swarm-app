@@ -3424,7 +3424,7 @@ const INDICATOR_DOT_SIZE: f32 = 8.;
 
 /// swarm-term: `trailing` preceded by a dot for the daemon session's state:
 /// green while a command runs, gray once it has exited, blue when another
-/// client is attached too. Idle shells get no dot.
+/// client is attached too, yellow while reconnecting. Idle shells get no dot.
 fn with_swarm_session_mark(
     terminal_view: &TerminalView,
     trailing: Option<Box<dyn Element>>,
@@ -3442,6 +3442,7 @@ fn with_swarm_session_mark(
                 SessionMark::Busy => theme.terminal_colors().normal.green.into(),
                 SessionMark::Exited => theme.disabled_ui_text_color().into(),
                 SessionMark::AttachedElsewhere => theme.terminal_colors().normal.blue.into(),
+                SessionMark::Reconnecting => theme.terminal_colors().normal.yellow.into(),
             };
             let dot = ConstrainedBox::new(WarpIcon::CircleFilled.to_warpui_icon(color).finish())
                 .with_width(INDICATOR_DOT_SIZE)

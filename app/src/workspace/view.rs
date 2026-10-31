@@ -6560,6 +6560,13 @@ impl Workspace {
             tab.title(),
             ctx,
         );
+        // A remote session's tab wears its host's color.
+        if let Some(host) = &tab.host {
+            let index = self.active_tab_index;
+            if matches!(self.tabs[index].selected_color, SelectedTabColor::Unset) {
+                self.tabs[index].selected_color = SelectedTabColor::Color(crate::swarm::host_color(host));
+            }
+        }
         if !FeatureFlag::GroupedTabs.is_enabled() {
             return;
         }

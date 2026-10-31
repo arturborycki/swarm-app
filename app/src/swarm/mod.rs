@@ -112,6 +112,15 @@ pub fn sync_session_groups(ctx: &warpui::AppContext) {
     }
 }
 
+/// The tab color for sessions on `host`: always the same for a host name.
+pub fn host_color(host: &str) -> warp_core::ui::theme::AnsiColorIdentifier {
+    use warp_core::ui::theme::AnsiColorIdentifier::*;
+    // No red: it reads as an error.
+    const COLORS: [warp_core::ui::theme::AnsiColorIdentifier; 5] = [Cyan, Magenta, Yellow, Green, Blue];
+    let hash = host.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
+    COLORS[hash as usize % COLORS.len()]
+}
+
 /// The `META_GROUP` value for a tab group.
 pub fn group_key(group: &crate::workspace::tab_group::TabGroup) -> String {
     group.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| format!("#{}", group.id.0))
@@ -150,7 +159,7 @@ pub fn claim_remote_tab_reopen() -> bool {
 /// teams, referrals or Drive).
 pub fn shows_settings_section(section: crate::settings_view::SettingsSection) -> bool {
     use crate::settings_view::SettingsSection::*;
-    matches!(section, Daemon | Hosts | Appearance | Features | Keybindings | Warpify | EditorAndCodeReview | Privacy | About)
+    matches!(section, Sessions | Daemon | Hosts | Appearance | Features | Keybindings | Warpify | EditorAndCodeReview | Privacy | About)
 }
 
 /// Whether shells live in `swarmd` sessions. Then Warp's own window/tab

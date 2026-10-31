@@ -653,3 +653,272 @@ impl From<ViewHandle<HostsPageView>> for SettingsPageViewHandle {
         SettingsPageViewHandle::SwarmHosts(view_handle)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Sessions
+
+#[derive(Clone, Debug)]
+pub enum SessionsPageAction {
+    Terminate { host: Option<String>, id: String, name: String },
+    Remove { host: Option<String>, id: String },
+    RemoveExited,
+}
+
+/// Every session on this Mac and the followed hosts, live from the sessions
+/// model, with terminate and remove.
+pub struct SessionsPageView {
+    page: PageType<Self>,
+    note: Option<String>,
+    /// Mouse states per session id (terminate, remove), kept across renders.
+    mouse: std::cell::RefCell<std::collections::HashMap<String, (MouseStateHandle, MouseStateHandle)>>,
+}
+
+impl SessionsPageView {
+    pub fn new(ctx: &mut ViewContext<SessionsPageView>) -> Self {
+        #[cfg(unix)]
+        {
+            let sessions = crate::swarm::sessions::SwarmSessions::handle(ctx);
+            ctx.subscribe_to_model(&sessions, |_, _, _, ctx| ctx.notify());
+        }
+        SessionsPageView {
+            page: PageType::new_monolith(SessionsWidget::default(), Some("Sessions"), false),
+            note: None,
+            mouse: Default::default(),
+        }
+    }
+
+    fn mouse_for(&self, id: &str) -> (MouseStateHandle, MouseStateHandle) {
+        self.mouse.borrow_mut().entry(id.to_string()).or_default().clone()
+    }
+
+    /// Runs `task` on the daemon runtime, showing its error if it fails.
+    #[cfg(unix)]
+    fn run_task<F>(&mut self, task: F, ctx: &mut ViewContext<Self>)
+    where
+        F: std::future::Future<Output = anyhow::Result<()>> + Send + 'static,
+    {
+        let Ok(daemons) = daemons_or_err() else { return };
+        let rx = daemons.run(task);
+        let _ = ctx.spawn(async move { rx.recv().await }, |me, result, ctx| {
+            me.note = match result {
+                Ok(Ok(())) => None,
+                Ok(Err(e)) => Some(format!("{e:#}")),
+                Err(_) => Some("The daemon connection closed.".into()),
+            };
+            ctx.notify();
+        });
+    }
+}
+
+impl Entity for SessionsPageView {
+    type Event = SettingsPageEvent;
+}
+
+impl TypedActionView for SessionsPageView {
+    type Action = SessionsPageAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        match action {
+            #[cfg(unix)]
+            SessionsPageAction::Terminate { host, id, name } => {
+                use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
+                let (host, id) = (host.clone(), id.clone());
+                let dialog = AlertDialogWithCallbacks::for_view(
+                    format!("Terminate {name}?"),
+                    "Its process gets SIGHUP, as when a terminal window closes. Anything running in it stops.",
+                    vec![
+                        ModalButton::for_view("Terminate", move |me: &mut Self, ctx| {
+                            let (host, id) = (host.clone(), id.clone());
+                            me.run_task(async move { daemon::terminate_session(host.as_deref(), &id).await }, ctx);
+                        }),
+                        ModalButton::for_view("Cancel", |_, _| {}),
+                    ],
+                    |_, _| {},
+                )
+                .without_dont_ask_again();
+                ctx.show_native_platform_modal(dialog);
+            }
+            #[cfg(unix)]
+            SessionsPageAction::Remove { host, id } => {
+                let (host, id) = (host.clone(), id.clone());
+                self.run_task(async move { daemon::remove_session(host.as_deref(), &id).await }, ctx);
+            }
+            #[cfg(unix)]
+            SessionsPageAction::RemoveExited => {
+                let model = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+                let mut exited = Vec::new();
+                let mut hosts: Vec<Option<String>> = vec![None];
+                hosts.extend(daemon::known_hosts().into_iter().map(Some));
+                for host in hosts {
+                    for s in model.sessions_on(host.as_deref()) {
+                        if !s.is_running() {
+                            exited.push((host.clone(), s.id.clone()));
+                        }
+                    }
+                }
+                self.run_task(
+                    async move {
+                        for (host, id) in exited {
+                            daemon::remove_session(host.as_deref(), &id).await?;
+                        }
+                        Ok(())
+                    },
+                    ctx,
+                );
+            }
+            #[cfg(not(unix))]
+            _ => {}
+        }
+    }
+}
+
+impl View for SessionsPageView {
+    fn ui_name() -> &'static str {
+        "SwarmSessionsPage"
+    }
+
+    fn render(&self, app: &AppContext) -> Box<dyn Element> {
+        self.page.render(self, app)
+    }
+}
+
+#[derive(Default)]
+struct SessionsWidget {
+    remove_exited: MouseStateHandle,
+}
+
+/// "3m ago" for a time in ms since the epoch.
+fn ago(ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(ms);
+    let s = now.saturating_sub(ms) / 1000;
+    match s {
+        0..=59 => "now".to_string(),
+        60..=3599 => format!("{}m ago", s / 60),
+        3600..=86399 => format!("{}h ago", s / 3600),
+        _ => format!("{}d ago", s / 86400),
+    }
+}
+
+fn size(bytes: u64) -> String {
+    match bytes {
+        0..=1023 => format!("{bytes} B"),
+        1024..=1_048_575 => format!("{:.0} KB", bytes as f64 / 1024.),
+        _ => format!("{:.1} MB", bytes as f64 / 1_048_576.),
+    }
+}
+
+impl SettingsWidget for SessionsWidget {
+    type View = SessionsPageView;
+
+    fn search_terms(&self) -> &str {
+        "sessions terminate remove exited buffer scrollback kill"
+    }
+
+    fn render(&self, view: &SessionsPageView, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let mut column = Flex::column();
+        column.add_child(line(
+            appearance,
+            "Every session the daemons keep, open in a tab or not. Terminating ends its program; removing also drops its scrollback.".into(),
+            true,
+        ));
+        column.add_child(buttons_row(vec![button(appearance, self.remove_exited.clone(), "Remove Exited Sessions", true, |ctx| {
+            ctx.dispatch_typed_action(SessionsPageAction::RemoveExited)
+        })]));
+        if let Some(note) = &view.note {
+            column.add_child(line(appearance, note.clone(), true));
+        }
+        #[cfg(unix)]
+        {
+            let model = crate::swarm::sessions::SwarmSessions::as_ref(app);
+            let mut hosts: Vec<Option<String>> = vec![None];
+            hosts.extend(daemon::known_hosts().into_iter().map(Some));
+            for host in hosts {
+                let sessions = model.sessions_on(host.as_deref());
+                if host.is_some() && sessions.is_empty() {
+                    continue;
+                }
+                column.add_child(render_separator(appearance));
+                column.add_child(render_sub_header(appearance, host.clone().unwrap_or_else(|| "This Mac".into()), None));
+                if sessions.is_empty() {
+                    column.add_child(line(appearance, "No sessions.".into(), true));
+                }
+                for s in sessions {
+                    let name = s.name.clone().unwrap_or_else(|| s.title.clone());
+                    let state = match &s.state {
+                        daemon::SessionState::Running => {
+                            s.foreground.clone().map(|f| format!("running {f}")).unwrap_or_else(|| "idle".into())
+                        }
+                        daemon::SessionState::Exited { code, signal, .. } => match (code, signal) {
+                            (Some(c), _) => format!("exited {c}"),
+                            (None, Some(sig)) => format!("killed by signal {sig}"),
+                            _ => "exited".into(),
+                        },
+                    };
+                    let attached = match s.clients.len() {
+                        0 => "detached".to_string(),
+                        1 => "open".to_string(),
+                        n => format!("open in {n} places"),
+                    };
+                    let detail = format!(
+                        "{} · {state} · {attached} · active {} · {} kept",
+                        s.cwd.as_deref().unwrap_or("~"),
+                        ago(s.last_output_ms.max(s.last_input_ms)),
+                        size(s.buffer_end - s.buffer_start),
+                    );
+                    let (terminate_mouse, remove_mouse) = view.mouse_for(&s.id);
+                    let running = s.is_running();
+                    let (h1, id1, n1) = (host.clone(), s.id.clone(), name.clone());
+                    let (h2, id2) = (host.clone(), s.id.clone());
+                    column.add_child(line(appearance, name, false));
+                    column.add_child(line(appearance, detail, true));
+                    column.add_child(buttons_row(vec![
+                        button(appearance, terminate_mouse, "Terminate", running, move |ctx| {
+                            ctx.dispatch_typed_action(SessionsPageAction::Terminate {
+                                host: h1.clone(),
+                                id: id1.clone(),
+                                name: n1.clone(),
+                            })
+                        }),
+                        button(appearance, remove_mouse, "Remove", !running, move |ctx| {
+                            ctx.dispatch_typed_action(SessionsPageAction::Remove { host: h2.clone(), id: id2.clone() })
+                        }),
+                    ]));
+                }
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = app;
+        column.finish()
+    }
+}
+
+impl SettingsPageMeta for SessionsPageView {
+    fn section() -> SettingsSection {
+        SettingsSection::Sessions
+    }
+
+    fn should_render(&self, _ctx: &AppContext) -> bool {
+        crate::swarm::use_daemon_sessions()
+    }
+
+    fn update_filter(&mut self, query: &str, ctx: &mut ViewContext<Self>) -> MatchData {
+        self.page.update_filter(query, ctx)
+    }
+
+    fn scroll_to_widget(&mut self, widget_id: &'static str) {
+        self.page.scroll_to_widget(widget_id)
+    }
+
+    fn clear_highlighted_widget(&mut self) {
+        self.page.clear_highlighted_widget();
+    }
+}
+
+impl From<ViewHandle<SessionsPageView>> for SettingsPageViewHandle {
+    fn from(view_handle: ViewHandle<SessionsPageView>) -> Self {
+        SettingsPageViewHandle::SwarmSessions(view_handle)
+    }
+}

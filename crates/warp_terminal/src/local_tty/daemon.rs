@@ -202,6 +202,7 @@ pub fn without_reattach_keys(
 }
 
 pub use swarm_client::swarm_proto::SessionInfo as DaemonSession;
+pub use swarm_client::swarm_proto::SessionState;
 
 /// Calls `on_change` with `host`'s full session list, now and after every
 /// change, reconnecting as needed. Stops once `on_change` returns `false`.
@@ -563,7 +564,44 @@ async fn run_bridge(
 /// Re-attaches to `id` on `host` from `offset`, retrying with backoff for a
 /// while. `None` if the session is gone, the tab was closed meanwhile, or it
 /// keeps failing.
+/// Daemon session ids whose tab lost its connection and is retrying.
+static RECONNECTING: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+static LINK_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
+
+/// Calls `f` (on a daemon thread) whenever a session starts or stops reconnecting.
+pub fn on_link_change(f: impl Fn() + Send + Sync + 'static) {
+    let _ = LINK_LISTENER.set(Box::new(f));
+}
+
+/// Whether the tab of daemon session `id` lost its connection and is retrying.
+pub fn is_reconnecting(id: &str) -> bool {
+    RECONNECTING.lock().unwrap().contains(id)
+}
+
+fn set_reconnecting(id: &str, on: bool) {
+    let changed = {
+        let mut set = RECONNECTING.lock().unwrap();
+        if on { set.insert(id.to_string()) } else { set.remove(id) }
+    };
+    if changed && let Some(listener) = LINK_LISTENER.get() {
+        listener();
+    }
+}
+
 async fn reconnect(
+    daemons: &Daemons,
+    host: Option<&str>,
+    id: &str,
+    offset: u64,
+    ctl: &mut mpsc::UnboundedReceiver<Ctl>,
+) -> Option<(Client, Attachment)> {
+    set_reconnecting(id, true);
+    let result = try_reconnect(daemons, host, id, offset, ctl).await;
+    set_reconnecting(id, false);
+    result
+}
+
+async fn try_reconnect(
     daemons: &Daemons,
     host: Option<&str>,
     id: &str,
@@ -911,6 +949,18 @@ pub async fn restart_daemon(host: Option<&str>) -> Result<()> {
         }
     }
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("the daemon didn't come back")))
+}
+
+/// Ends session `id` on `host`: SIGHUP to its process, like closing a terminal.
+pub async fn terminate_session(host: Option<&str>, id: &str) -> Result<()> {
+    let daemons = daemons().context("daemon sessions are off")?;
+    daemons.client(host).await?.kill(id, libc::SIGHUP).await
+}
+
+/// Drops session `id` on `host` for good (ending it first if it still runs).
+pub async fn remove_session(host: Option<&str>, id: &str) -> Result<()> {
+    let daemons = daemons().context("daemon sessions are off")?;
+    daemons.client(host).await?.remove(id).await
 }
 
 /// Where this Mac's daemon writes its logs.
