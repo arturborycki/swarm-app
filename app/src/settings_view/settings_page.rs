@@ -130,6 +130,8 @@ pub enum SettingsPageViewHandle {
     BillingAndUsage(ViewHandle<BillingAndUsageDispatchView>),
     MCPServers(ViewHandle<MCPServersSettingsPageView>),
     WarpDrive(ViewHandle<WarpDriveSettingsPageView>),
+    SwarmDaemon(ViewHandle<super::swarm_pages::DaemonPageView>),
+    SwarmHosts(ViewHandle<super::swarm_pages::HostsPageView>),
 }
 
 impl SettingsPageViewHandle {
@@ -158,6 +160,8 @@ impl SettingsPageViewHandle {
             BillingAndUsage(view_handle) => ChildView::new(view_handle).finish(),
             MCPServers(view_handle) => ChildView::new(view_handle).finish(),
             WarpDrive(view_handle) => ChildView::new(view_handle).finish(),
+            SwarmDaemon(view_handle) => ChildView::new(view_handle).finish(),
+            SwarmHosts(view_handle) => ChildView::new(view_handle).finish(),
         }
     }
 }

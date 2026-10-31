@@ -743,19 +743,26 @@ pub async fn install_swarmd(host: &str) -> Result<()> {
             bail!("{} isn't bundled with this app", b.display());
         }
     }
-    let mkdir = ssh(host, &format!("mkdir -p \"$HOME/{REMOTE_BIN_DIR}\"")).await?;
+    // Copied into a staging dir, then renamed into place, so a running
+    // daemon's binaries can be replaced.
+    let staging = format!("{REMOTE_BIN_DIR}/.staging");
+    let mkdir = ssh(host, &format!("mkdir -p \"$HOME/{staging}\"")).await?;
     if !mkdir.status.success() {
         bail!("{}", String::from_utf8_lossy(&mkdir.stderr).trim());
     }
     let status = tokio::process::Command::new("scp")
         .args(["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
         .args(&bins)
-        .arg(format!("{host}:{REMOTE_BIN_DIR}/"))
+        .arg(format!("{host}:{staging}/"))
         .status()
         .await
         .context("run scp")?;
     if !status.success() {
         bail!("copying swarmd to {host} failed ({status})");
+    }
+    let install = ssh(host, &format!("cd \"$HOME/{REMOTE_BIN_DIR}\" && chmod +x .staging/* && mv -f .staging/* . && rmdir .staging")).await?;
+    if !install.status.success() {
+        bail!("{}", String::from_utf8_lossy(&install.stderr).trim());
     }
     Ok(())
 }
@@ -784,6 +791,100 @@ pub fn remember_host(host: &str) {
     if let Err(e) = result {
         log::warn!("swarm: couldn't remember host {host}: {e}");
     }
+}
+
+/// Forgets a host: its sessions aren't reopened at launch any more and its
+/// connection is closed. Its daemon and sessions keep running.
+pub fn forget_host(host: &str) {
+    let hosts: Vec<_> = known_hosts().into_iter().filter(|h| h != host).collect();
+    let text = if hosts.is_empty() { String::new() } else { hosts.join("\n") + "\n" };
+    if let Err(e) = std::fs::write(known_hosts_file(), text) {
+        log::warn!("swarm: couldn't forget host {host}: {e}");
+    }
+    if let Some(daemons) = daemons() {
+        let key = Some(host.to_string());
+        daemons.rt.spawn(async move {
+            daemons.clients.lock().await.remove(&key);
+        });
+    }
+}
+
+/// What Settings shows about a daemon.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DaemonStatus {
+    pub version: String,
+    pub hostname: String,
+    pub os: String,
+    /// `at-login` start mode (a launchd agent or systemd user unit).
+    pub at_login: bool,
+    pub sessions: usize,
+    pub running: usize,
+    pub detached: usize,
+}
+
+/// Connects to `host`'s daemon (`None`: this Mac's, started if needed) and
+/// reports on it.
+pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
+    let daemons = daemons().context("daemon sessions are off")?;
+    let client = tokio::time::timeout(Duration::from_secs(20), daemons.client(host)).await.context("timed out")??;
+    let sessions = client.list().await?;
+    let info = client.daemon().clone();
+    let at_login = swarmd_command(host, &["service", "status"]).await?.contains("start mode: at-login");
+    Ok(DaemonStatus {
+        version: info.version,
+        hostname: info.hostname,
+        os: info.os,
+        at_login,
+        sessions: sessions.len(),
+        running: sessions.iter().filter(|s| s.is_running()).count(),
+        detached: sessions.iter().filter(|s| s.is_running() && s.clients.is_empty()).count(),
+    })
+}
+
+/// Switches `host`'s daemon between the `at-login` and `with-app` start modes.
+pub async fn set_start_at_login(host: Option<&str>, at_login: bool) -> Result<()> {
+    let args: &[&str] = if at_login { &["service", "install"] } else { &["service", "uninstall"] };
+    swarmd_command(host, args).await.map(|_| ())
+}
+
+/// Stops `host`'s daemon and starts it again. Sessions keep running (the
+/// daemon re-adopts them) and open tabs reconnect.
+pub async fn restart_daemon(host: Option<&str>) -> Result<()> {
+    let daemons = daemons().context("daemon sessions are off")?;
+    daemons.client(host).await?.shutdown_daemon().await?;
+    daemons.clients.lock().await.remove(&host.map(str::to_string));
+    let mut last_error = None;
+    for _ in 0..30 {
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        match daemons.client(host).await {
+            Ok(_) => return Ok(()),
+            Err(e) => last_error = Some(e),
+        }
+    }
+    Err(last_error.unwrap_or_else(|| anyhow::anyhow!("the daemon didn't come back")))
+}
+
+/// Where this Mac's daemon writes its logs.
+pub fn daemon_log_dir() -> std::path::PathBuf {
+    swarm_client::swarm_proto::paths::log_dir()
+}
+
+/// Runs `swarmd <args>` here or, for a host, over ssh; its stdout.
+async fn swarmd_command(host: Option<&str>, args: &[&str]) -> Result<String> {
+    let output = match host {
+        None => tokio::process::Command::new(swarm_client::daemon_exe())
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .output()
+            .await
+            .context("run swarmd")?,
+        Some(h) => ssh(h, &swarm_client::remote_swarmd_command(&args.join(" "))).await?,
+    };
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("swarmd {} failed: {}", args.join(" "), stderr.trim().lines().last().unwrap_or("no output"));
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
 /// `host`'s running sessions marked to reopen that nothing is attached to, in

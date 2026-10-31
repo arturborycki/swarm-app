@@ -76,6 +76,7 @@ use crate::workspaces::workspace::{BillingMetadata, CustomerType};
 use crate::{GlobalResourceHandlesProvider, TelemetryEvent};
 
 mod about_page;
+mod swarm_pages;
 mod admin_actions;
 mod agent_assisted_environment_modal;
 mod agent_profiles_page;
@@ -311,6 +312,10 @@ pub enum SettingsViewEvent {
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub enum SettingsSection {
     About,
+    /// swarm-term: this Mac's session daemon.
+    Daemon,
+    /// swarm-term: remote hosts and their daemons.
+    Hosts,
     #[default]
     Account,
     BillingAndUsage,
@@ -381,6 +386,8 @@ impl SettingsSection {
     pub fn slug(self) -> &'static str {
         match self {
             Self::About => "About",
+            Self::Daemon => "Daemon",
+            Self::Hosts => "Hosts",
             Self::Account => "Account",
             Self::BillingAndUsage => "Billing and usage",
             Self::Appearance => "Appearance",
@@ -417,6 +424,8 @@ impl SettingsSection {
     pub fn from_slug(slug: &str) -> Option<Self> {
         let section = match slug {
             "About" => Self::About,
+            "Daemon" => Self::Daemon,
+            "Hosts" => Self::Hosts,
             "Account" => Self::Account,
             "Billing and usage" => Self::BillingAndUsage,
             "Appearance" => Self::Appearance,
@@ -1166,6 +1175,8 @@ macro_rules! update_page {
             SettingsPageViewHandle::BillingAndUsage(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::MCPServers(handle) => $ctx.update_view(handle, $update),
             SettingsPageViewHandle::WarpDrive(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::SwarmDaemon(handle) => $ctx.update_view(handle, $update),
+            SettingsPageViewHandle::SwarmHosts(handle) => $ctx.update_view(handle, $update),
         }
     };
 }
@@ -1239,6 +1250,8 @@ impl SettingsView {
 
         // About page
         let about_page_handle = ctx.add_typed_action_view(AboutPageView::new);
+        let swarm_daemon_page_handle = ctx.add_typed_action_view(swarm_pages::DaemonPageView::new);
+        let swarm_hosts_page_handle = ctx.add_typed_action_view(swarm_pages::HostsPageView::new);
 
         // Warp Agent page
         let warp_agent_page_handle = ctx.add_typed_action_view(WarpAgentPageView::new);
@@ -1401,6 +1414,8 @@ impl SettingsView {
             SettingsPage::new(environments_page_handle.clone()),
             SettingsPage::new(privacy_page_handle),
             SettingsPage::new(about_page_handle),
+            SettingsPage::new(swarm_daemon_page_handle),
+            SettingsPage::new(swarm_hosts_page_handle),
         ]);
 
         // Build sidebar nav items. Umbrellas group their subpages here and
@@ -1463,6 +1478,8 @@ impl SettingsView {
             nav_items.retain(|item| matches!(item, SettingsNavItem::Page(section) if crate::swarm::shows_settings_section(*section)));
             let about = nav_items.len().saturating_sub(1);
             nav_items.insert(about, SettingsNavItem::Page(SettingsSection::EditorAndCodeReview));
+            nav_items.insert(0, SettingsNavItem::Page(SettingsSection::Hosts));
+            nav_items.insert(0, SettingsNavItem::Page(SettingsSection::Daemon));
         }
 
         let initial_page = match page {
@@ -2139,6 +2156,8 @@ impl SettingsView {
             SettingsPageViewHandle::Appearance(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::BillingAndUsage(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::About(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::SwarmDaemon(v) => v.as_ref(app).should_render(app),
+            SettingsPageViewHandle::SwarmHosts(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::WarpCloudAgentAPIKeys(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Privacy(v) => v.as_ref(app).should_render(app),
             SettingsPageViewHandle::Warpify(v) => v.as_ref(app).should_render(app),

@@ -126,7 +126,7 @@ pub fn claim_remote_tab_reopen() -> bool {
 /// teams, referrals or Drive).
 pub fn shows_settings_section(section: crate::settings_view::SettingsSection) -> bool {
     use crate::settings_view::SettingsSection::*;
-    matches!(section, Appearance | Features | Keybindings | Warpify | EditorAndCodeReview | Privacy | About)
+    matches!(section, Daemon | Hosts | Appearance | Features | Keybindings | Warpify | EditorAndCodeReview | Privacy | About)
 }
 
 /// Whether shells live in `swarmd` sessions. Then Warp's own window/tab
