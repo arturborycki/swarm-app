@@ -3,7 +3,9 @@
 //! type. Open one, several or all of them, start a new one, or terminate them.
 //!
 //! Keys: ↑↓ move, Space (with an empty filter) or ⇧↩ select, ↩ open the
-//! selection (or the highlighted row), ⌘↩ open every match, Esc close.
+//! selection (or the highlighted row), ⌘↩ open every match, Esc close. A
+//! row's right-click menu renames it, copies its attach command or
+//! terminates it.
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};
@@ -13,10 +15,14 @@ use warp_core::ui::theme::Fill;
 use warp_core::ui::theme::color::internal_colors;
 use warp_editor::editor::NavigationKey;
 use warp_terminal::local_tty::daemon::{self, DaemonSession};
+use pathfinder_geometry::vector::vec2f;
+use warpui::clipboard::ClipboardContent;
 use warpui::elements::{
-    Border, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container, CornerRadius,
-    CrossAxisAlignment, DispatchEventResult, DropShadow, Element, EventHandler, Expanded, Fill as ElementFill, Flex,
-    MainAxisAlignment, MainAxisSize, MouseStateHandle, ParentElement, Radius, ScrollbarWidth, Shrinkable, Text,
+    Border, ChildAnchor, ChildView, ClippedScrollStateHandle, ClippedScrollable, ConstrainedBox, Container,
+    CornerRadius, CrossAxisAlignment, DispatchEventResult, DropShadow, Element, EventHandler, Expanded,
+    Fill as ElementFill, Flex, MainAxisAlignment, MainAxisSize, MouseStateHandle, OffsetPositioning, ParentElement,
+    PositionedElementAnchor, PositionedElementOffsetBounds, Radius, SavePosition, ScrollbarWidth, Shrinkable, Stack,
+    Text,
 };
 use warpui::fonts::{Properties, Weight};
 use warpui::platform::Cursor;
@@ -29,6 +35,7 @@ use super::widgets::ButtonStyle;
 use super::sessions::{SessionMark, SwarmSessions};
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions};
+use crate::menu::{Event as MenuEvent, Menu, MenuItemFields};
 
 const WIDTH: f32 = 620.;
 const LIST_MAX_HEIGHT: f32 = 320.;
@@ -54,7 +61,12 @@ pub enum SwarmPickerAction {
     OpenSelected,
     OpenAll,
     NewSession,
+    /// Terminate the checked sessions.
     Terminate,
+    ShowRowMenu(String),
+    StartRename(String),
+    CopyAttachCommand(String),
+    TerminateOne(String),
 }
 
 pub struct SwarmPicker {
@@ -67,6 +79,12 @@ pub struct SwarmPicker {
     note: Option<String>,
     scroll: ClippedScrollStateHandle,
     mouse: RefCell<HashMap<String, MouseStateHandle>>,
+    row_menu: ViewHandle<Menu<SwarmPickerAction>>,
+    /// The session whose right-click menu is open.
+    row_menu_for: Option<String>,
+    rename: ViewHandle<EditorView>,
+    /// The session being renamed in place.
+    renaming: Option<String>,
 }
 
 impl SwarmPicker {
@@ -106,6 +124,31 @@ impl SwarmPicker {
             EditorEvent::Escape => ctx.emit(SwarmPickerEvent::Close),
             _ => {}
         });
+        let row_menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
+        ctx.subscribe_to_view(&row_menu, |me, _, event, ctx| {
+            if let MenuEvent::Close { .. } = event {
+                me.row_menu_for = None;
+                if me.renaming.is_none() {
+                    ctx.focus(&me.filter);
+                }
+                ctx.notify();
+            }
+        });
+        let rename = ctx.add_typed_action_view(|ctx| {
+            let appearance = Appearance::as_ref(ctx);
+            EditorView::single_line(
+                SingleLineEditorOptions { text: TextOptions::ui_text(Some(13.), appearance), ..Default::default() },
+                ctx,
+            )
+        });
+        ctx.subscribe_to_view(&rename, |me, editor, event, ctx| match event {
+            EditorEvent::Enter => {
+                let name = editor.as_ref(ctx).buffer_text(ctx).trim().to_string();
+                me.finish_rename(Some(name), ctx);
+            }
+            EditorEvent::Escape | EditorEvent::Blurred => me.finish_rename(None, ctx),
+            _ => {}
+        });
         let sessions = SwarmSessions::handle(ctx);
         ctx.subscribe_to_model(&sessions, |me, _, _, ctx| {
             // Drop selections of sessions that went away or were opened.
@@ -122,6 +165,10 @@ impl SwarmPicker {
             note: None,
             scroll: Default::default(),
             mouse: Default::default(),
+            row_menu,
+            row_menu_for: None,
+            rename,
+            renaming: None,
         }
     }
 
@@ -204,10 +251,10 @@ impl SwarmPicker {
         self.open(rows, ctx);
     }
 
-    fn terminate_selected(&mut self, ctx: &mut ViewContext<Self>) {
+    /// Terminates `ids` (of the listed sessions) after a confirmation.
+    fn terminate(&mut self, ids: &BTreeSet<String>, ctx: &mut ViewContext<Self>) {
         use warpui::modals::{AlertDialogWithCallbacks, ModalButton};
-        let picked: Vec<DaemonSession> =
-            self.rows(ctx).into_iter().filter(|s| self.selected.contains(&s.id)).collect();
+        let picked: Vec<DaemonSession> = self.rows(ctx).into_iter().filter(|s| ids.contains(&s.id)).collect();
         let Some(first) = picked.first() else { return };
         let (title, body) = match picked.len() {
             1 => (
@@ -227,6 +274,7 @@ impl SwarmPicker {
             vec![
                 ModalButton::for_view("Terminate", move |me: &mut Self, ctx| {
                     let Some(daemons) = daemon::daemons() else { return };
+                    me.selected.retain(|id| !ids.contains(id));
                     let (host, ids) = (host.clone(), ids.clone());
                     let rx = daemons.run(async move {
                         for id in ids {
@@ -242,7 +290,6 @@ impl SwarmPicker {
                         };
                         ctx.notify();
                     });
-                    me.selected.clear();
                 }),
                 ModalButton::for_view("Cancel", |_, _| {}),
             ],
@@ -250,6 +297,61 @@ impl SwarmPicker {
         )
         .without_dont_ask_again();
         ctx.show_native_platform_modal(dialog);
+    }
+
+    fn show_row_menu(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        let items = vec![
+            MenuItemFields::new("Rename…").with_on_select_action(SwarmPickerAction::StartRename(id.clone())).into_item(),
+            MenuItemFields::new("Copy Attach Command")
+                .with_on_select_action(SwarmPickerAction::CopyAttachCommand(id.clone()))
+                .into_item(),
+            MenuItemFields::new("Terminate…").with_on_select_action(SwarmPickerAction::TerminateOne(id.clone())).into_item(),
+        ];
+        self.row_menu.update(ctx, |menu, ctx| menu.set_items(items, ctx));
+        self.row_menu_for = Some(id);
+        self.note = None;
+        ctx.focus(&self.row_menu);
+        ctx.notify();
+    }
+
+    fn start_rename(&mut self, id: String, ctx: &mut ViewContext<Self>) {
+        let Some(session) = self.rows(ctx).into_iter().find(|s| s.id == id) else { return };
+        let current = session.name.clone().unwrap_or_default();
+        self.rename.update(ctx, |editor, ctx| {
+            editor.set_buffer_text(&current, ctx);
+            editor.select_all(ctx);
+        });
+        self.renaming = Some(id);
+        ctx.focus(&self.rename);
+        ctx.notify();
+    }
+
+    /// Ends renaming: `Some(name)` saves it (an empty name goes back to the
+    /// shell's title), `None` cancels.
+    fn finish_rename(&mut self, name: Option<String>, ctx: &mut ViewContext<Self>) {
+        let Some(id) = self.renaming.take() else { return };
+        ctx.focus(&self.filter);
+        ctx.notify();
+        let (Some(name), Some(daemons)) = (name, daemon::daemons()) else { return };
+        let host = self.host.clone();
+        let name = (!name.is_empty()).then_some(name);
+        let rx = daemons.run(async move { daemon::rename_session(host.as_deref(), &id, name).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, |me, result, ctx| {
+            if let Ok(Err(e)) = result {
+                me.note = Some(format!("Couldn't rename: {e:#}"));
+                ctx.notify();
+            }
+        });
+    }
+
+    fn copy_attach_command(&mut self, id: &str, ctx: &mut ViewContext<Self>) {
+        let command = match &self.host {
+            Some(host) => format!("swarmctl attach --host {host} {id}"),
+            None => format!("swarmctl attach {id}"),
+        };
+        ctx.clipboard().write(ClipboardContent::plain_text(command.clone()));
+        self.note = Some(format!("Copied: {command}"));
+        ctx.notify();
     }
 
     fn mouse_for(&self, key: &str) -> MouseStateHandle {
@@ -284,7 +386,14 @@ impl TypedActionView for SwarmPicker {
             SwarmPickerAction::OpenSelected => self.open_selected(ctx),
             SwarmPickerAction::OpenAll => self.open_all(ctx),
             SwarmPickerAction::NewSession => ctx.emit(SwarmPickerEvent::NewSession(self.host.clone())),
-            SwarmPickerAction::Terminate => self.terminate_selected(ctx),
+            SwarmPickerAction::Terminate => {
+                let ids = self.selected.clone();
+                self.terminate(&ids, ctx);
+            }
+            SwarmPickerAction::ShowRowMenu(id) => self.show_row_menu(id.clone(), ctx),
+            SwarmPickerAction::StartRename(id) => self.start_rename(id.clone(), ctx),
+            SwarmPickerAction::CopyAttachCommand(id) => self.copy_attach_command(id, ctx),
+            SwarmPickerAction::TerminateOne(id) => self.terminate(&BTreeSet::from([id.clone()]), ctx),
         }
     }
 }
@@ -491,11 +600,21 @@ impl View for SwarmPicker {
                 .with_child(
                     Shrinkable::new(
                         1.,
-                        Text::new_inline(s.display_name().to_string(), font, 13.)
-                            .with_color(main.into())
-                            .with_style(Properties::default().weight(Weight::Semibold))
-                            .with_clip(ClipConfig::ellipsis())
-                            .finish(),
+                        if self.renaming.as_deref() == Some(s.id.as_str()) {
+                            Container::new(ChildView::new(&self.rename).finish())
+                                .with_background(internal_colors::fg_overlay_1(theme))
+                                .with_border(Border::all(1.).with_border_fill(accent))
+                                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+                                .with_padding_left(4.)
+                                .with_padding_right(4.)
+                                .finish()
+                        } else {
+                            Text::new_inline(s.display_name().to_string(), font, 13.)
+                                .with_color(main.into())
+                                .with_style(Properties::default().weight(Weight::Semibold))
+                                .with_clip(ClipConfig::ellipsis())
+                                .finish()
+                        },
                     )
                     .finish(),
                 );
@@ -526,11 +645,12 @@ impl View for SwarmPicker {
                 text(super::ago(s.last_output_ms.max(s.last_input_ms)), 12., sub),
             );
             let (toggle, open) = (SwarmPickerAction::Toggle(s.id.clone()), SwarmPickerAction::OpenOne(s.id.clone()));
-            list.add_child(
-                Hoverable::new(self.mouse_for(&s.id), move |state| {
+            let menu = SwarmPickerAction::ShowRowMenu(s.id.clone());
+            let row_highlighted = highlighted || self.row_menu_for.as_deref() == Some(s.id.as_str());
+            let row = Hoverable::new(self.mouse_for(&s.id), move |state| {
                     let background = if checked {
                         accent.with_opacity(25)
-                    } else if highlighted || state.is_hovered() {
+                    } else if row_highlighted || state.is_hovered() {
                         internal_colors::fg_overlay_2(theme)
                     } else {
                         Fill::Solid(warpui::color::ColorU::transparent_black())
@@ -547,8 +667,9 @@ impl View for SwarmPicker {
                 .with_cursor(Cursor::PointingHand)
                 .on_click(move |ctx, _, _| ctx.dispatch_typed_action(toggle.clone()))
                 .on_double_click(move |ctx, _, _| ctx.dispatch_typed_action(open.clone()))
-                .finish(),
-            );
+                .on_right_click(move |ctx, _, _| ctx.dispatch_typed_action(menu.clone()))
+                .finish();
+            list.add_child(SavePosition::new(row, &row_position_id(&s.id)).finish());
         }
         let list = ConstrainedBox::new(
             ClippedScrollable::vertical(
@@ -590,7 +711,8 @@ impl View for SwarmPicker {
             .with_padding_bottom(10.)
             .finish();
         let hint = self.note.clone().unwrap_or_else(|| {
-            "↑↓ move · Space or ⇧↩ select · ↩ open · ⌘↩ open all matches · double-click opens one".to_string()
+            "↑↓ move · Space or ⇧↩ select · ↩ open · ⌘↩ open all matches · right-click for Rename, Copy attach command"
+                .to_string()
         });
         let hint = Container::new(text(hint, 11., sub))
             .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_1(theme)))
@@ -609,7 +731,7 @@ impl View for SwarmPicker {
             .with_child(footer)
             .with_child(hint)
             .finish();
-        EventHandler::new(
+        let picker = EventHandler::new(
             ConstrainedBox::new(
                 Container::new(body)
                     .with_background(internal_colors::neutral_1(theme))
@@ -622,6 +744,24 @@ impl View for SwarmPicker {
             .finish(),
         )
         .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
-        .finish()
+        .finish();
+        let mut stack = Stack::new().with_child(picker);
+        if let Some(id) = self.row_menu_for.as_deref().filter(|id| rows.iter().any(|s| s.id == *id)) {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.row_menu).finish(),
+                OffsetPositioning::offset_from_save_position_element(
+                    row_position_id(id),
+                    vec2f(40., -2.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::BottomLeft,
+                    ChildAnchor::TopLeft,
+                ),
+            );
+        }
+        stack.finish()
     }
+}
+
+fn row_position_id(session_id: &str) -> String {
+    format!("swarm_picker_row:{session_id}")
 }

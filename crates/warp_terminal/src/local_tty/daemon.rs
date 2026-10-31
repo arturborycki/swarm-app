@@ -17,9 +17,10 @@ use std::collections::{BTreeMap, HashMap};
 use std::os::fd::IntoRawFd;
 use std::os::unix::net::UnixStream as StdUnixStream;
 use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
+use instant::Instant;
 use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size};
 use swarm_client::{strip_terminal_responses, Attachment, Client, StreamEvent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -610,8 +611,8 @@ static LINKS_CHANGED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync:
 const LINK_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 static LINK_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
-static LINK_LOST_LISTENER: std::sync::OnceLock<Box<dyn Fn(Option<String>, String) + Send + Sync>> =
-    std::sync::OnceLock::new();
+type LinkLostListener = Box<dyn Fn(Option<String>, String) + Send + Sync>;
+static LINK_LOST_LISTENER: std::sync::OnceLock<LinkLostListener> = std::sync::OnceLock::new();
 
 /// Calls `f(host, session id)` (on a daemon thread) when a tab gives up
 /// reconnecting to its session.
@@ -1042,10 +1043,27 @@ pub async fn restart_daemon(host: Option<&str>) -> Result<()> {
     Err(last_error.unwrap_or_else(|| anyhow::anyhow!("the daemon didn't come back")))
 }
 
+/// Sessions this app terminated: their exit (usually code 1 or SIGHUP)
+/// was asked for, so it isn't a failure to report.
+static TERMINATED: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+
+/// Whether this app terminated session `id`.
+pub fn was_terminated(id: &str) -> bool {
+    TERMINATED.lock().unwrap().contains(id)
+}
+
 /// Ends session `id` on `host`: SIGHUP to its process, like closing a terminal.
 pub async fn terminate_session(host: Option<&str>, id: &str) -> Result<()> {
     let daemons = daemons().context("daemon sessions are off")?;
+    TERMINATED.lock().unwrap().insert(id.to_string());
     daemons.client(host).await?.kill(id, libc::SIGHUP).await
+}
+
+/// Names session `id` on `host` (`None`: back to its shell's title).
+pub async fn rename_session(host: Option<&str>, id: &str, name: Option<String>) -> Result<()> {
+    let daemons = daemons().context("daemon sessions are off")?;
+    let update = swarm_client::swarm_proto::MetaUpdate { name: Some(name), ui: BTreeMap::new() };
+    daemons.client(host).await?.set_meta(id, update).await.map(|_| ())
 }
 
 /// Drops session `id` on `host` for good (ending it first if it still runs).

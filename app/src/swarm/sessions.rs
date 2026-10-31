@@ -153,7 +153,7 @@ impl SwarmSessions {
         let previous = self.by_host.get(&host).cloned().unwrap_or_default();
         let mut news = Vec::new();
         for s in &sessions {
-            let was_running = previous.iter().any(|p| p.id == s.id && p.is_running());
+            let was_running = previous.iter().any(|p| p.id == s.id && p.is_running()) && !daemon::was_terminated(&s.id);
             if let (true, daemon::SessionState::Exited { code, signal, .. }) = (was_running, &s.state) {
                 let failed = match (code, signal) {
                     (Some(c), _) => (*c != 0).then(|| format!("exited with code {c}")),
