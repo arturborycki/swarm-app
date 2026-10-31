@@ -144,3 +144,13 @@ pub fn cg_color_to_color_u(color: CGColor) -> ColorU {
         )
     }
 }
+
+/// Sets the app's Dock tile badge (`None` clears it). Main thread only.
+pub fn set_dock_badge(label: Option<&str>) {
+    let mtm = unsafe { objc2::MainThreadMarker::new_unchecked() };
+    let tile = objc2_app_kit::NSApplication::sharedApplication(mtm).dockTile();
+    let label = label.map(objc2_foundation::NSString::from_str);
+    tile.setBadgeLabel(label.as_deref());
+    // With a custom content view (app icon choices) the tile only redraws when asked.
+    tile.display();
+}

@@ -11,6 +11,9 @@ type Host = Option<String>;
 
 pub struct SwarmSessions {
     by_host: BTreeMap<Host, Vec<DaemonSession>>,
+    /// Things the user should look at (sessions that failed, connections that
+    /// were lost), by (host, session id): what to tell them.
+    attention: BTreeMap<(Host, String), String>,
     tx: async_channel::Sender<(Host, Vec<DaemonSession>)>,
 }
 
@@ -29,6 +32,8 @@ pub enum SessionMark {
 
 pub enum SwarmSessionsEvent {
     Changed,
+    /// Something needs the user's attention: (title, body) for a notification.
+    Attention { title: String, body: String },
 }
 
 impl SwarmSessions {
@@ -41,7 +46,13 @@ impl SwarmSessions {
             let _ = link_tx.try_send(());
         });
         let _ = ctx.spawn_stream_local(link_rx, |_, _, ctx| ctx.emit(SwarmSessionsEvent::Changed), |_, _| {});
-        let me = SwarmSessions { by_host: BTreeMap::new(), tx };
+        // Tabs that gave up reconnecting.
+        let (lost_tx, lost_rx) = async_channel::unbounded::<(Host, String)>();
+        daemon::on_link_lost(move |host, id| {
+            let _ = lost_tx.try_send((host, id));
+        });
+        let _ = ctx.spawn_stream_local(lost_rx, Self::on_link_lost, |_, _| {});
+        let me = SwarmSessions { by_host: BTreeMap::new(), attention: BTreeMap::new(), tx };
         if super::use_daemon_sessions() {
             me.start_watching(None);
         }
@@ -66,10 +77,58 @@ impl SwarmSessions {
     }
 
     fn on_sessions(&mut self, (host, sessions): (Host, Vec<DaemonSession>), ctx: &mut ModelContext<Self>) {
-        if self.by_host.get(&host) != Some(&sessions) {
-            self.by_host.insert(host, sessions);
-            ctx.emit(SwarmSessionsEvent::Changed);
+        if self.by_host.get(&host) == Some(&sessions) {
+            return;
         }
+        let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
+        let previous = self.by_host.get(&host).cloned().unwrap_or_default();
+        let mut news = Vec::new();
+        for s in &sessions {
+            let was_running = previous.iter().any(|p| p.id == s.id && p.is_running());
+            if let (true, daemon::SessionState::Exited { code, signal, .. }) = (was_running, &s.state) {
+                let failed = match (code, signal) {
+                    (Some(c), _) => (*c != 0).then(|| format!("exited with code {c}")),
+                    (None, Some(sig)) => Some(format!("was killed by signal {sig}")),
+                    _ => None,
+                };
+                if let Some(how) = failed {
+                    let name = s.name.clone().unwrap_or_else(|| s.title.clone());
+                    let body = format!("{name} on {place} {how}.");
+                    log::info!("swarm: needs attention: {body}");
+                    self.attention.insert((host.clone(), s.id.clone()), body.clone());
+                    news.push(("Session ended".to_string(), body));
+                }
+            }
+        }
+        // Attention ends when the session is gone, or (a lost connection) when
+        // a client is attached to it again.
+        self.attention.retain(|(h, id), _| {
+            *h != host || sessions.iter().any(|s| &s.id == id && (!s.is_running() || s.clients.is_empty()))
+        });
+        self.by_host.insert(host, sessions);
+        for (title, body) in news {
+            ctx.emit(SwarmSessionsEvent::Attention { title, body });
+        }
+        ctx.emit(SwarmSessionsEvent::Changed);
+    }
+
+    fn on_link_lost(&mut self, (host, id): (Host, String), ctx: &mut ModelContext<Self>) {
+        let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
+        let name = self
+            .sessions_on(host.as_deref())
+            .iter()
+            .find(|s| s.id == id)
+            .and_then(|s| s.name.clone())
+            .unwrap_or_else(|| "A session".to_string());
+        let body = format!("{name} on {place}: couldn't reconnect. It may still be running there.");
+        self.attention.insert((host, id), body.clone());
+        ctx.emit(SwarmSessionsEvent::Attention { title: "Connection lost".to_string(), body });
+        ctx.emit(SwarmSessionsEvent::Changed);
+    }
+
+    /// How many things need the user's attention (the Dock badge).
+    pub fn attention_count(&self) -> usize {
+        self.attention.len()
     }
 
     /// Running local sessions no client is attached to, oldest first.

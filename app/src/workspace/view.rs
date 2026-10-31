@@ -2743,8 +2743,16 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         #[cfg(unix)]
-        ctx.subscribe_to_model(&crate::swarm::sessions::SwarmSessions::handle(ctx), |me, _, _, ctx| {
+        ctx.subscribe_to_model(&crate::swarm::sessions::SwarmSessions::handle(ctx), |me, _, event, ctx| {
+            if let crate::swarm::sessions::SwarmSessionsEvent::Attention { title, body } = event {
+                me.notify_swarm_attention(title.clone(), body.clone(), ctx);
+            }
             me.sync_swarm_tab_names(ctx);
+            #[cfg(target_os = "macos")]
+            {
+                let count = crate::swarm::sessions::SwarmSessions::as_ref(ctx).attention_count();
+                warpui::platform::mac::utils::set_dock_badge((count > 0).then(|| count.to_string()).as_deref());
+            }
             ctx.notify();
         });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), move |_me, _, event, ctx| {
@@ -6617,6 +6625,26 @@ impl Workspace {
             }
         }
     }
+
+    /// A desktop notification for a session that needs attention, sent by the
+    /// front window only (so several windows don't repeat it), when the user
+    /// has notifications on.
+    #[cfg(unix)]
+    fn notify_swarm_attention(&mut self, title: String, body: String, ctx: &mut ViewContext<Self>) {
+        let settings = &SessionSettings::as_ref(ctx).notifications;
+        if settings.mode != NotificationsMode::Enabled || !settings.is_needs_attention_enabled {
+            return;
+        }
+        let front = ctx.windows().active_window().or_else(|| ctx.windows().frontmost_window_id());
+        if front.is_some_and(|w| w != ctx.window_id()) {
+            return;
+        }
+        let play_sound = settings.play_notification_sound;
+        ctx.send_desktop_notification(UserNotification::new_with_sound(title, body, None, play_sound), |_, _, _| {});
+    }
+
+    #[cfg(not(unix))]
+    fn notify_swarm_attention(&mut self, _title: String, _body: String, _ctx: &mut ViewContext<Self>) {}
 
     /// Shows sessions' daemon names (renamed elsewhere, e.g. `swarmctl rename`)
     /// as their tabs' titles.

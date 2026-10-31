@@ -287,7 +287,9 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
         );
         file_menu_options.extend([
             MenuItem::Separator,
-            swarm_workspace_item("Connect to Host…", WorkspaceAction::SwarmShowHostsMenu),
+            // ⇧⌘K (DESIGN §9b) clears lines in the input editor and ⌃⌘K opens
+            // the keyboard shortcuts; ⌃⌘H (host) is free.
+            swarm_workspace_item_with_key("Connect to Host…", WorkspaceAction::SwarmShowHostsMenu, Some("ctrl-cmd-h")),
             swarm_workspace_item("Detached Sessions…", WorkspaceAction::SwarmShowDetachedMenu),
         ]);
     }
@@ -423,7 +425,11 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
     let mut items = Vec::new();
     if crate::swarm::SWARM_CHROME {
         // Sessions in the sidebar, or as tabs across the title bar.
-        items.push(swarm_workspace_item("Show or Hide Sessions Sidebar", WorkspaceAction::ToggleVerticalTabsPanel));
+        items.push(swarm_workspace_item_with_key(
+            "Show or Hide Sessions Sidebar",
+            WorkspaceAction::ToggleVerticalTabsPanel,
+            Some("ctrl-cmd-s"),
+        ));
     }
     items.extend(vec![
         updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
@@ -1342,6 +1348,11 @@ fn swarm_relabel(item: MenuItem, name: &'static str) -> MenuItem {
 
 /// swarm-term: a menu item running `action` in the active window's workspace.
 fn swarm_workspace_item(title: &str, action: WorkspaceAction) -> MenuItem {
+    swarm_workspace_item_with_key(title, action, None)
+}
+
+/// Like `swarm_workspace_item`, with a key equivalent.
+fn swarm_workspace_item_with_key(title: &str, action: WorkspaceAction, key: Option<&str>) -> MenuItem {
     MenuItem::Custom(CustomMenuItem::new(
         title,
         move |ctx| ctx.dispatch_global_action("root_view:workspace_action", &action),
@@ -1349,7 +1360,7 @@ fn swarm_workspace_item(title: &str, action: WorkspaceAction) -> MenuItem {
             disabled: Some(WindowManager::handle(ctx).as_ref(ctx).active_window().is_none()),
             ..Default::default()
         },
-        None,
+        key.and_then(|k| Keystroke::parse(k).ok()),
     ))
 }
 

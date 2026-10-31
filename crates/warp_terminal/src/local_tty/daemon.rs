@@ -568,6 +568,15 @@ async fn run_bridge(
 static RECONNECTING: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
 static LINK_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
+static LINK_LOST_LISTENER: std::sync::OnceLock<Box<dyn Fn(Option<String>, String) + Send + Sync>> =
+    std::sync::OnceLock::new();
+
+/// Calls `f(host, session id)` (on a daemon thread) when a tab gives up
+/// reconnecting to its session.
+pub fn on_link_lost(f: impl Fn(Option<String>, String) + Send + Sync + 'static) {
+    let _ = LINK_LOST_LISTENER.set(Box::new(f));
+}
+
 /// Calls `f` (on a daemon thread) whenever a session starts or stops reconnecting.
 pub fn on_link_change(f: impl Fn() + Send + Sync + 'static) {
     let _ = LINK_LISTENER.set(Box::new(f));
@@ -633,6 +642,10 @@ async fn try_reconnect(
             Err(e) => log::debug!("swarm: reconnect to {host:?}: {e:#}"),
         }
         delay = (delay * 2).min(Duration::from_secs(15));
+    }
+    log::warn!("swarm: gave up reconnecting to {id} on {host:?}");
+    if let Some(listener) = LINK_LOST_LISTENER.get() {
+        listener(host.map(str::to_string), id.to_string());
     }
     None
 }
