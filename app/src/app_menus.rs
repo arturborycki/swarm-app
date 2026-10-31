@@ -280,17 +280,17 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             })
             .collect();
         file_menu_options.insert(2, swarm_new_session_on_host_menu());
-        // The navigation palette lists open tabs and detached sessions on every host.
+        file_menu_options.insert(3, swarm_workspace_item_with_key("Open Session…", WorkspaceAction::SwarmShowPicker, Some("cmd-o")));
+        // The navigation palette finds open tabs and detached sessions on every host.
         file_menu_options.insert(
-            3,
-            swarm_relabel(updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx), "Open Session…"),
+            4,
+            swarm_relabel(updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx), "Find Tab or Session…"),
         );
         file_menu_options.extend([
             MenuItem::Separator,
             // ⇧⌘K (DESIGN §9b) clears lines in the input editor and ⌃⌘K opens
             // the keyboard shortcuts; ⌃⌘H (host) is free.
             swarm_workspace_item_with_key("Connect to Host…", WorkspaceAction::SwarmShowHostsMenu, Some("ctrl-cmd-h")),
-            swarm_workspace_item("Detached Sessions…", WorkspaceAction::SwarmShowDetachedMenu),
         ]);
     }
     file_menu_options.extend([

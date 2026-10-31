@@ -1848,8 +1848,8 @@ fn render_swarm_panel_footer(workspace: &Workspace, appearance: &Appearance, app
             format!("{detached} detached"),
             workspace.mouse_states.swarm_sidebar_detached_button.clone(),
             true,
-            WorkspaceAction::SwarmShowDetachedMenuFromSidebar,
-            super::SWARM_SIDEBAR_DETACHED_POSITION_ID,
+            WorkspaceAction::SwarmShowPicker,
+            "workspace_view:swarm_sidebar_detached_button",
         ));
     }
     row.add_child(button(

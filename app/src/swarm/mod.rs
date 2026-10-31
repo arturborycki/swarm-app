@@ -6,6 +6,8 @@
 //! here so the diff against upstream stays easy to find.
 
 #[cfg(unix)]
+pub mod picker;
+#[cfg(unix)]
 pub mod sessions;
 
 /// Swarm's own window chrome (title bar, session menus) instead of Warp's.
@@ -193,6 +195,21 @@ pub fn use_daemon_sessions() -> bool {
     return warp_terminal::local_tty::daemon::enabled();
     #[cfg(not(unix))]
     false
+}
+
+/// "3m ago" for a time in ms since the epoch.
+pub fn ago(ms: u64) -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(ms);
+    let s = now.saturating_sub(ms) / 1000;
+    match s {
+        0..=59 => "now".to_string(),
+        60..=3599 => format!("{}m ago", s / 60),
+        3600..=86399 => format!("{}h ago", s / 3600),
+        _ => format!("{}d ago", s / 86400),
+    }
 }
 
 /// `path` with this Mac's home folder shown as `~`.

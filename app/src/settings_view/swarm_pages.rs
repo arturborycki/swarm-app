@@ -817,21 +817,6 @@ struct SessionsWidget {
     remove_exited: MouseStateHandle,
 }
 
-/// "3m ago" for a time in ms since the epoch.
-fn ago(ms: u64) -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as u64)
-        .unwrap_or(ms);
-    let s = now.saturating_sub(ms) / 1000;
-    match s {
-        0..=59 => "now".to_string(),
-        60..=3599 => format!("{}m ago", s / 60),
-        3600..=86399 => format!("{}h ago", s / 3600),
-        _ => format!("{}d ago", s / 86400),
-    }
-}
-
 fn size(bytes: u64) -> String {
     match bytes {
         0..=1023 => format!("{bytes} B"),
@@ -895,7 +880,7 @@ impl SettingsWidget for SessionsWidget {
                     let detail = format!(
                         "{} · {state} · {attached} · active {} · {} kept",
                         s.cwd.as_deref().unwrap_or("~"),
-                        ago(s.last_output_ms.max(s.last_input_ms)),
+                        crate::swarm::ago(s.last_output_ms.max(s.last_input_ms)),
                         size(s.buffer_end - s.buffer_start),
                     );
                     let (terminate_mouse, remove_mouse) = view.mouse_for(&s.id);

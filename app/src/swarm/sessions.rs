@@ -48,7 +48,7 @@ impl SessionMark {
             SessionMark::Idle => (Icon::CircleFilled, colors.blue.into()),
             SessionMark::Busy => (Icon::CircleHalf, colors.blue.into()),
             SessionMark::Attention => (Icon::AlertCircle, colors.red.into()),
-            SessionMark::Exited => (Icon::CircleRing, theme.disabled_ui_text_color().into()),
+            SessionMark::Exited => (Icon::CircleRing, theme.disabled_ui_text_color()),
             SessionMark::Reconnecting => (Icon::Refresh, colors.yellow.into()),
         }
     }
@@ -289,6 +289,11 @@ impl SwarmSessions {
             .find(|s| s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id))?
             .name
             .clone()
+    }
+
+    /// The remote hosts being followed, in name order.
+    pub fn followed_hosts(&self) -> Vec<String> {
+        self.by_host.keys().flatten().cloned().collect()
     }
 
     /// `host`'s sessions as last seen (`None`: the local daemon).

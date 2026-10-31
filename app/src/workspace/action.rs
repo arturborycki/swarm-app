@@ -127,8 +127,8 @@ pub enum AutoCloudHandoffTrigger {
 
 #[derive(Debug, Clone)]
 pub enum WorkspaceAction {
-    /// swarm-term: open the menu of detached daemon sessions.
-    SwarmShowDetachedMenu,
+    /// swarm-term: show (or hide) the session picker.
+    SwarmShowPicker,
     /// swarm-term: open a tab attached to a running daemon session.
     SwarmReattach(crate::swarm::ReattachTab),
     /// swarm-term: list ssh hosts to connect to.
@@ -139,8 +139,6 @@ pub enum WorkspaceAction {
     SwarmNewSession { host: Option<String> },
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
-    /// swarm-term: the detached sessions menu, opened from the sidebar's footer.
-    SwarmShowDetachedMenuFromSidebar,
     /// swarm-term: the hosts menu, opened from the sidebar's footer.
     SwarmShowHostsMenuFromSidebar,
     ActivateTab(usize),
@@ -1143,13 +1141,12 @@ impl WorkspaceAction {
             | OpenCLIAgentToolbarEditor
             | OpenHeaderToolbarEditor
             | ShowHeaderToolbarContextMenu { .. }
-            | SwarmShowDetachedMenu
+            | SwarmShowPicker
             | SwarmReattach(_)
             | SwarmShowHostsMenu
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
             | SwarmRetryConnections
-            | SwarmShowDetachedMenuFromSidebar
             | SwarmShowHostsMenuFromSidebar
             | Reauth
             | SignupAnonymousUser
