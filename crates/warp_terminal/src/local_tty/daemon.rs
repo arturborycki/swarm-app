@@ -52,6 +52,22 @@ pub fn mark_reattached(warp_session_id: u64) {
     REATTACHED.lock().unwrap().insert(warp_session_id);
 }
 
+/// Where each daemon-backed Warp session lives (true: a remote host). Warp
+/// otherwise guesses from the shell's hostname, which changes as a Mac moves
+/// between networks, so long-lived local sessions would turn "remote".
+static SESSION_IS_REMOTE: LazyLock<Mutex<HashMap<u64, bool>>> = LazyLock::new(Default::default);
+
+pub fn set_session_locality(warp_session_id: u64, is_remote: bool) {
+    SESSION_IS_REMOTE.lock().unwrap().insert(warp_session_id, is_remote);
+}
+
+/// `Some(true)` if the session is on a remote host, `Some(false)` if on this
+/// Mac's daemon, `None` if it isn't a daemon session this app knows.
+pub fn session_is_remote(warp_session_id: u64) -> Option<bool> {
+    SESSION_IS_REMOTE.lock().unwrap().get(&warp_session_id).copied()
+}
+
+
 pub fn is_reattached(warp_session_id: u64) -> bool {
     REATTACHED.lock().unwrap().contains(&warp_session_id)
 }
@@ -151,6 +167,8 @@ pub struct ReattachRequest {
     pub warp_session_id: Option<u64>,
     /// Set up Warp's integration in this idle shell.
     pub warpify_shell: Option<String>,
+    /// The session's host; `None` for this Mac's daemon.
+    pub host: Option<String>,
 }
 
 /// The re-attach request carried by a new tab's env vars, if any. A known Warp
@@ -162,7 +180,11 @@ pub fn reattach_request(env: &std::collections::HashMap<std::ffi::OsString, std:
     if let Some(id) = warp_session_id {
         mark_reattached(id);
     }
-    Some(ReattachRequest { warp_session_id, warpify_shell: get(REATTACH_WARPIFY_SHELL_ENV) })
+    Some(ReattachRequest {
+        warp_session_id,
+        warpify_shell: get(REATTACH_WARPIFY_SHELL_ENV),
+        host: get(REATTACH_HOST_ENV),
+    })
 }
 
 /// `env` without the re-attach keys (for shell recovery, which must start fresh).
@@ -342,6 +364,7 @@ impl DaemonSpawner {
         }
 
         let session_id = shell_starter.session_id();
+        set_session_locality(session_id.as_u64(), false);
         let shell_type = shell_starter.shell_type();
         let ShellStarter::Direct(starter) = shell_starter else {
             bail!("only direct shells run in the daemon");

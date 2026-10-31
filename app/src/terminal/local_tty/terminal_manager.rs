@@ -1113,6 +1113,10 @@ fn on_shell_determined<S: TerminalSurface>(
         None => shell_starter.session_id(),
     };
     #[cfg(unix)]
+    if let Some(r) = &reattach {
+        warp_terminal::local_tty::daemon::set_session_locality(generated_session_id.as_u64(), r.host.is_some());
+    }
+    #[cfg(unix)]
     let mut env_vars = env_vars;
     #[cfg(unix)]
     if warpify_shell.is_some() {

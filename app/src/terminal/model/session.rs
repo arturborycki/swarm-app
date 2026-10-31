@@ -724,6 +724,14 @@ impl SessionInfo {
         init_shell_value: &InitShellValue,
         is_ssh_session: bool,
     ) -> BootstrapSessionType {
+        // swarm-term: daemon sessions know where they live; the hostname a
+        // long-lived shell reported can differ from this Mac's current one.
+        #[cfg(unix)]
+        if let Some(is_remote) =
+            warp_terminal::local_tty::daemon::session_is_remote(init_shell_value.session_id.as_u64())
+        {
+            return if is_remote { BootstrapSessionType::WarpifiedRemote } else { BootstrapSessionType::Local };
+        }
         match get_local_hostname() {
             Ok(local_hostname) => {
                 // Ensures subshells are treated as local

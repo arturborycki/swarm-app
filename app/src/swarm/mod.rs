@@ -56,6 +56,13 @@ impl ReattachTab {
         }
     }
 
+    /// The tab's title: the session's name, else the host alias for a remote
+    /// session (its shell's title is unreliable after a replay), else the
+    /// shell's own title.
+    pub fn title(&self) -> Option<String> {
+        self.name.clone().or_else(|| self.host.clone())
+    }
+
     /// Whether the tab will show Warp blocks (otherwise it shows raw output).
     pub fn has_warp_integration(&self) -> bool {
         self.warp_session_id.is_some() || self.warpify_shell.is_some()

@@ -4115,7 +4115,7 @@ impl Workspace {
                         self.add_tab_with_pane_layout(
                             PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
                             Arc::new(HashMap::new()),
-                            tab.name.clone(),
+                            tab.title(),
                             ctx,
                         );
                     }
@@ -6506,7 +6506,7 @@ impl Workspace {
                         me.add_tab_with_pane_layout(
                             PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(&tab))),
                             Arc::new(HashMap::new()),
-                            tab.name.clone(),
+                            tab.title(),
                             ctx,
                         );
                     }
@@ -6532,7 +6532,7 @@ impl Workspace {
                 me.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(&tab))),
                     Arc::new(HashMap::new()),
-                    tab.name.clone(),
+                    tab.title(),
                     ctx,
                 );
             }
@@ -25961,7 +25961,7 @@ impl TypedActionView for Workspace {
                 self.add_tab_with_pane_layout(
                     PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
                     Arc::new(HashMap::new()),
-                    tab.name.clone(),
+                    tab.title(),
                     ctx,
                 );
             }
