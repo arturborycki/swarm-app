@@ -6671,7 +6671,7 @@ impl Workspace {
     #[cfg(not(unix))]
     fn sync_swarm_tab_names(&mut self, _ctx: &mut ViewContext<Self>) {}
 
-    /// The active tab for VoiceOver: "build, tab 2 of 5, running a command".
+    /// The active tab for VoiceOver: "build, tab 2 of 5, This Mac, running cargo".
     fn spoken_active_tab(&self, ctx: &AppContext) -> String {
         let pane_group = self.active_tab_pane_group().as_ref(ctx);
         let mut text = format!(
@@ -6682,14 +6682,14 @@ impl Workspace {
         );
         #[cfg(unix)]
         {
-            let mark = pane_group
+            let status = pane_group
                 .terminal_views(ctx)
                 .first()
                 .and_then(|view| view.as_ref(ctx).active_block_session_id())
-                .and_then(|id| crate::swarm::sessions::SwarmSessions::as_ref(ctx).mark_for(id.as_u64()));
-            if let Some(mark) = mark {
+                .and_then(|id| crate::swarm::sessions::SwarmSessions::as_ref(ctx).status_for(id.as_u64()));
+            if let Some(status) = status {
                 text.push_str(", ");
-                text.push_str(mark.spoken());
+                text.push_str(&status.spoken());
             }
         }
         text

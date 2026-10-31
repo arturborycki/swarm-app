@@ -17,6 +17,9 @@ pub enum Icon {
     Copy,
     Circle,
     CircleFilled,
+    /// Swarm's session marks: a hollow ring (exited) and a half-filled one (running).
+    CircleRing,
+    CircleHalf,
     Queued,
     Triangle,
     CopyMenuItem,
@@ -365,6 +368,8 @@ impl From<Icon> for &'static str {
             Icon::Copy => "bundled/svg/copy.svg",
             Icon::Circle => "bundled/svg/circle.svg",
             Icon::CircleFilled => "bundled/svg/circle-filled.svg",
+            Icon::CircleRing => "bundled/svg/swarm-circle-ring.svg",
+            Icon::CircleHalf => "bundled/svg/swarm-circle-half.svg",
             Icon::Triangle => "bundled/svg/triangle.svg",
             Icon::Queued => "bundled/svg/queued.svg",
             Icon::CopyMenuItem => "bundled/svg/copy-05.svg",

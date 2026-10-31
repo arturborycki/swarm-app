@@ -20,28 +20,51 @@ pub struct SwarmSessions {
     tx: async_channel::Sender<(Host, Vec<DaemonSession>)>,
 }
 
-/// A session's state as the sidebar shows it.
+/// A session's state as tabs and the sidebar show it: each has its own shape
+/// as well as a color, so it reads without color too.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionMark {
-    /// A command is running in the foreground.
+    /// The shell is waiting at a prompt (●).
+    Idle,
+    /// A command is running in the foreground (◐).
     Busy,
-    /// The session's process has ended.
+    /// It ended with an error, or its connection was lost for good (!).
+    Attention,
+    /// The session's process has ended (○).
     Exited,
-    /// Another client (another window, `swarmctl attach`) is attached too.
-    AttachedElsewhere,
-    /// The tab lost its connection to the daemon and is retrying.
+    /// The tab lost its connection to the daemon and is retrying (⟳).
     Reconnecting,
 }
 
-impl SessionMark {
-    /// The mark in words, for VoiceOver (the sidebar only shows a colored dot).
-    pub fn spoken(self) -> &'static str {
-        match self {
-            SessionMark::Busy => "running a command",
-            SessionMark::Exited => "ended",
-            SessionMark::AttachedElsewhere => "also open elsewhere",
-            SessionMark::Reconnecting => "reconnecting",
+/// What a tab shows for its daemon session.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionStatus {
+    pub mark: SessionMark,
+    /// Another client (another window, `swarmctl attach`) is attached too.
+    pub elsewhere: bool,
+    /// The remote host; `None` on this Mac.
+    pub host: Option<String>,
+    /// The foreground command, while one runs.
+    pub command: Option<String>,
+}
+
+impl SessionStatus {
+    /// The status in words, for VoiceOver: "devbox, running psql, also open elsewhere".
+    pub fn spoken(&self) -> String {
+        let mut text = self.host.clone().unwrap_or_else(|| "This Mac".to_string());
+        text.push_str(", ");
+        match (self.mark, &self.command) {
+            (SessionMark::Busy, Some(command)) => text.push_str(&format!("running {command}")),
+            (SessionMark::Busy, None) => text.push_str("running a command"),
+            (SessionMark::Idle, _) => text.push_str("idle"),
+            (SessionMark::Attention, _) => text.push_str("needs attention"),
+            (SessionMark::Exited, _) => text.push_str("ended"),
+            (SessionMark::Reconnecting, _) => text.push_str("reconnecting"),
         }
+        if self.elsewhere {
+            text.push_str(", also open elsewhere");
+        }
+        text
     }
 }
 
@@ -188,23 +211,33 @@ impl SwarmSessions {
         self.sessions_on(None).iter().filter(|s| s.is_running() && s.clients.is_empty())
     }
 
-    /// What the sidebar marks the session behind a terminal with, by its Warp
-    /// session id; `None` for an idle shell or a session this app doesn't follow.
-    pub fn mark_for(&self, warp_session_id: u64) -> Option<SessionMark> {
-        let session = self.by_host.values().flatten().find(|s| {
-            s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id)
+    /// The status of the session behind a terminal, by its Warp session id;
+    /// `None` for a terminal that isn't a session this app follows.
+    pub fn status_for(&self, warp_session_id: u64) -> Option<SessionStatus> {
+        let (host, session) = self.by_host.iter().find_map(|(host, sessions)| {
+            let s = sessions.iter().find(|s| {
+                s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id)
+            })?;
+            Some((host, s))
         })?;
-        if daemon::is_reconnecting(&session.id) {
-            Some(SessionMark::Reconnecting)
+        let needs_attention = self.attention.contains_key(&(host.clone(), session.id.clone()));
+        let mark = if daemon::is_reconnecting(&session.id) {
+            SessionMark::Reconnecting
+        } else if needs_attention {
+            SessionMark::Attention
         } else if !session.is_running() {
-            Some(SessionMark::Exited)
-        } else if session.clients.len() > 1 {
-            Some(SessionMark::AttachedElsewhere)
+            SessionMark::Exited
         } else if session.foreground.is_some() {
-            Some(SessionMark::Busy)
+            SessionMark::Busy
         } else {
-            None
-        }
+            SessionMark::Idle
+        };
+        Some(SessionStatus {
+            mark,
+            elsewhere: session.is_running() && session.clients.len() > 1,
+            host: host.clone(),
+            command: session.foreground.clone(),
+        })
     }
 
     /// The daemon's name for the session behind a terminal, by Warp session id.

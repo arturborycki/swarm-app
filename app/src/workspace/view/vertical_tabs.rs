@@ -3358,7 +3358,9 @@ fn resolve_icon_with_status_variant(
         TypedPane::Terminal(terminal_pane) => {
             let terminal_view = terminal_pane.terminal_view(app);
             let terminal_view = terminal_view.as_ref(app);
-            match terminal_view_agent_icon_variant(terminal_view, app) {
+            match terminal_view_agent_icon_variant(terminal_view, app)
+                .or_else(|| swarm_session_icon(terminal_view, theme, app))
+            {
                 Some(variant) => variant,
                 _ => {
                     // Plain terminal: use foreground color per design spec
@@ -3433,6 +3435,39 @@ const INDICATOR_DOT_SIZE: f32 = 8.;
 /// swarm-term: `trailing` preceded by a dot for the daemon session's state:
 /// green while a command runs, gray once it has exited, blue when another
 /// client is attached too, yellow while reconnecting. Idle shells get no dot.
+/// The daemon session status behind a terminal (Swarm), if it has one.
+#[cfg(unix)]
+fn swarm_session_status(terminal_view: &TerminalView, app: &AppContext) -> Option<crate::swarm::sessions::SessionStatus> {
+    let id = terminal_view.active_block_session_id()?;
+    crate::swarm::sessions::SwarmSessions::as_ref(app).status_for(id.as_u64())
+}
+
+/// A daemon session's state as the row's icon: a shape per state (● idle,
+/// ◐ running, ! needs attention, ○ exited, ⟳ reconnecting), each in its own color.
+fn swarm_session_icon(terminal_view: &TerminalView, theme: &WarpTheme, app: &AppContext) -> Option<IconWithStatusVariant> {
+    #[cfg(unix)]
+    {
+        use crate::swarm::sessions::SessionMark;
+        let status = swarm_session_status(terminal_view, app)?;
+        let colors = theme.terminal_colors().normal;
+        let (icon, icon_color): (WarpIcon, WarpThemeFill) = match status.mark {
+            SessionMark::Idle => (WarpIcon::CircleFilled, colors.blue.into()),
+            SessionMark::Busy => (WarpIcon::CircleHalf, colors.blue.into()),
+            SessionMark::Attention => (WarpIcon::AlertCircle, colors.red.into()),
+            SessionMark::Exited => (WarpIcon::CircleRing, theme.disabled_ui_text_color().into()),
+            SessionMark::Reconnecting => (WarpIcon::Refresh, colors.yellow.into()),
+        };
+        return Some(IconWithStatusVariant::Neutral { icon, icon_color });
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (terminal_view, theme, app);
+        None
+    }
+}
+
+/// Adds the "attached elsewhere" dot (another window or `swarmctl attach` is
+/// on the same session) before `trailing`.
 fn with_swarm_session_mark(
     terminal_view: &TerminalView,
     trailing: Option<Box<dyn Element>>,
@@ -3440,32 +3475,24 @@ fn with_swarm_session_mark(
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
     #[cfg(unix)]
-    {
-        use crate::swarm::sessions::{SessionMark, SwarmSessions};
-        let mark = terminal_view
-            .active_block_session_id()
-            .and_then(|id| SwarmSessions::as_ref(app).mark_for(id.as_u64()));
-        if let Some(mark) = mark {
-            let color: WarpThemeFill = match mark {
-                SessionMark::Busy => theme.terminal_colors().normal.green.into(),
-                SessionMark::Exited => theme.disabled_ui_text_color().into(),
-                SessionMark::AttachedElsewhere => theme.terminal_colors().normal.blue.into(),
-                SessionMark::Reconnecting => theme.terminal_colors().normal.yellow.into(),
-            };
-            let dot = ConstrainedBox::new(WarpIcon::CircleFilled.to_warpui_icon(color).finish())
-                .with_width(INDICATOR_DOT_SIZE)
-                .with_height(INDICATOR_DOT_SIZE)
-                .finish();
-            let mut row = Flex::row()
-                .with_main_axis_size(MainAxisSize::Min)
-                .with_cross_axis_alignment(CrossAxisAlignment::Center)
-                .with_spacing(4.)
-                .with_child(dot);
-            if let Some(trailing) = trailing {
-                row.add_child(trailing);
-            }
-            return Some(row.finish());
+    if swarm_session_status(terminal_view, app).is_some_and(|status| status.elsewhere) {
+        let dot = ConstrainedBox::new(
+            WarpIcon::CircleFilled
+                .to_warpui_icon(theme.terminal_colors().normal.blue.into())
+                .finish(),
+        )
+        .with_width(INDICATOR_DOT_SIZE)
+        .with_height(INDICATOR_DOT_SIZE)
+        .finish();
+        let mut row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Min)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(4.)
+            .with_child(dot);
+        if let Some(trailing) = trailing {
+            row.add_child(trailing);
         }
+        return Some(row.finish());
     }
     #[cfg(not(unix))]
     let _ = (terminal_view, theme, app);
