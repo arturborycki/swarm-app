@@ -560,13 +560,12 @@ impl SettingsWidget for HostsWidget {
         for row in &view.rows {
             column.add_child(render_separator(appearance));
             column.add_child(render_sub_header(appearance, row.host.clone(), None));
-            let local_os = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
             let (headline, detail, at_login, install_label, can_install) = match &row.state {
                 Load::Loading => ("Checking…".to_string(), None, None, "Reinstall swarmd", false),
                 Load::Failed(e) => (format!("swarmd isn't responding: {e}"), None, None, "Reinstall swarmd", false),
                 Load::Ready(HostState::Ready(status)) => {
                     let (h, d) = describe(status);
-                    (h, Some(d), Some(status.at_login), "Reinstall swarmd", status.os == local_os)
+                    (h, Some(d), Some(status.at_login), "Reinstall swarmd", daemon::bundled_swarmd_dir(&status.os).is_some())
                 }
                 Load::Ready(HostState::NeedsInstall { os, installable }) => (
                     if *installable {

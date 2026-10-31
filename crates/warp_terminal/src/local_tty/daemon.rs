@@ -705,6 +705,39 @@ async fn ssh(host: &str, command: &str) -> Result<std::process::Output> {
     Ok(output)
 }
 
+/// This app's platform, as `swarmd` reports it (`<os>-<arch>`).
+fn local_platform() -> String {
+    format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
+}
+
+/// `uname -sm` output as `<os>-<arch>`, the way `swarmd` reports it.
+fn platform_from_uname(uname: &str) -> String {
+    let mut parts = uname.split_whitespace();
+    let os = match parts.next().unwrap_or("") {
+        "Darwin" => "macos".to_string(),
+        other => other.to_lowercase(),
+    };
+    let arch = match parts.next().unwrap_or("") {
+        "arm64" => "aarch64",
+        "amd64" => "x86_64",
+        other => other,
+    };
+    format!("{os}-{arch}")
+}
+
+/// Where this app keeps `swarmd`, `swarm-shim` and `swarmctl` for `platform`
+/// (`<os>-<arch>`): next to the app's own binary for this Mac's platform,
+/// else `Contents/Resources/swarmd/<platform>/` (Linux builds).
+pub fn bundled_swarmd_dir(platform: &str) -> Option<std::path::PathBuf> {
+    let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    let dir = if platform == local_platform() {
+        exe_dir
+    } else {
+        exe_dir.parent()?.join("Resources").join("swarmd").join(platform)
+    };
+    ["swarmd", "swarm-shim", "swarmctl"].iter().all(|b| dir.join(b).exists()).then_some(dir)
+}
+
 /// Checks ssh access to `host` and whether `swarmd` is installed there.
 pub async fn check_host(host: &str) -> HostCheck {
     let probe = format!(r#"uname -sm; p="$HOME/{REMOTE_BIN_DIR}/swarmd"; [ -x "$p" ] || p=$(command -v swarmd); [ -n "$p" ] && "$p" --version"#);
@@ -720,29 +753,20 @@ pub async fn check_host(host: &str) -> HostCheck {
     if stdout.lines().any(|l| l.starts_with("swarmd ")) {
         return HostCheck::Ready;
     }
-    let os = stdout.lines().next().unwrap_or("unknown").trim().to_string();
-    let local = format!(
-        "{} {}",
-        if cfg!(target_os = "macos") { "Darwin" } else { "Linux" },
-        if cfg!(target_arch = "aarch64") {
-            if cfg!(target_os = "macos") { "arm64" } else { "aarch64" }
-        } else {
-            "x86_64"
-        }
-    );
-    HostCheck::NeedsInstall { installable: os == local, os }
+    let os = platform_from_uname(stdout.lines().next().unwrap_or("unknown"));
+    HostCheck::NeedsInstall { installable: bundled_swarmd_dir(&os).is_some(), os }
 }
 
-/// Copies this app's `swarmd`, `swarm-shim` and `swarmctl` to the per-user
-/// bin dir on `host`. Only valid when [`check_host`] said `installable`.
+/// Copies this app's `swarmd`, `swarm-shim` and `swarmctl` for `host`'s
+/// platform to the per-user bin dir there.
 pub async fn install_swarmd(host: &str) -> Result<()> {
-    let exe_dir = std::env::current_exe()?.parent().context("app has no bin dir")?.to_path_buf();
-    let bins: Vec<_> = ["swarmd", "swarm-shim", "swarmctl"].iter().map(|b| exe_dir.join(b)).collect();
-    for b in &bins {
-        if !b.exists() {
-            bail!("{} isn't bundled with this app", b.display());
-        }
+    let uname = ssh(host, "uname -sm").await?;
+    if !uname.status.success() {
+        bail!("{}", String::from_utf8_lossy(&uname.stderr).trim());
     }
+    let platform = platform_from_uname(&String::from_utf8_lossy(&uname.stdout));
+    let dir = bundled_swarmd_dir(&platform).with_context(|| format!("this app has no swarmd for {platform}"))?;
+    let bins: Vec<_> = ["swarmd", "swarm-shim", "swarmctl"].iter().map(|b| dir.join(b)).collect();
     // Copied into a staging dir, then renamed into place, so a running
     // daemon's binaries can be replaced.
     let staging = format!("{REMOTE_BIN_DIR}/.staging");

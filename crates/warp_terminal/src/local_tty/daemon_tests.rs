@@ -26,3 +26,12 @@ fn ssh_hosts_follow_includes_and_skip_patterns() {
     assert_eq!(hosts, vec!["spark", "spark-l", "devbox", "build"]);
     std::fs::remove_dir_all(&home).unwrap();
 }
+
+#[test]
+fn uname_maps_to_swarmd_platform_names() {
+    assert_eq!(platform_from_uname("Linux aarch64\n"), "linux-aarch64");
+    assert_eq!(platform_from_uname("Linux x86_64"), "linux-x86_64");
+    assert_eq!(platform_from_uname("Darwin arm64"), "macos-aarch64");
+    assert_eq!(platform_from_uname("FreeBSD amd64"), "freebsd-x86_64");
+    assert_eq!(local_platform(), format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
+}
