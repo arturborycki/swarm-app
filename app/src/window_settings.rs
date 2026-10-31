@@ -7,7 +7,8 @@ use warpui::{AppContext, SingletonEntity, WindowId};
 define_settings_group!(WindowSettings, settings: [
     background_blur_radius: BackgroundBlurRadius {
         type: u8,
-        default: 1,
+        // swarm-term: a frosted window by default.
+        default: if crate::swarm::SWARM_CHROME { 24 } else { 1 },
         supported_platforms: SupportedPlatforms::MAC,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::GUI,
@@ -39,7 +40,7 @@ define_settings_group!(WindowSettings, settings: [
     },
     background_opacity: BackgroundOpacity {
         type: u8,
-        default: 100,
+        default: if crate::swarm::SWARM_CHROME { 88 } else { 100 },
         supported_platforms: SupportedPlatforms::DESKTOP,
         sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
         surface: settings::SettingSurfaces::GUI,
