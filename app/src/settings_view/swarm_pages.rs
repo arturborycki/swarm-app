@@ -213,7 +213,7 @@ impl TypedActionView for DaemonPageView {
             DaemonPageAction::OpenLogs => {
                 let dir = daemon::daemon_log_dir();
                 let opener = if cfg!(target_os = "macos") { "open" } else { "xdg-open" };
-                if let Err(e) = std::process::Command::new(opener).arg(&dir).spawn() {
+                if let Err(e) = command::blocking::Command::new(opener).arg(&dir).spawn() {
                     self.note = Some(format!("Couldn't open {}: {e}", dir.display()));
                     ctx.notify();
                 }

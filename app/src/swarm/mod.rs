@@ -157,7 +157,7 @@ pub fn claim_first_run() -> bool {
             return false;
         }
         let _ = std::fs::create_dir_all(swarm_client_state_dir());
-        return std::fs::write(&marker, b"").is_ok();
+        std::fs::write(&marker, b"").is_ok()
     }
     #[cfg(not(unix))]
     false
