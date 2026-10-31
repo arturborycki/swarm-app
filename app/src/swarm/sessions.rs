@@ -264,14 +264,7 @@ impl SwarmSessions {
         if let Some(i) = others.iter().position(|n| *n == me) {
             others.remove(i);
         }
-        let cwd = session.cwd.clone().map(|cwd| match (host, dirs::home_dir()) {
-            (None, Some(home)) => match std::path::Path::new(&cwd).strip_prefix(&home) {
-                Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
-                Ok(rest) => format!("~/{}", rest.display()),
-                Err(_) => cwd,
-            },
-            _ => cwd,
-        });
+        let cwd = session.cwd.clone().map(|cwd| if host.is_none() { super::home_relative(&cwd) } else { cwd });
         let shell = session.command.first().map(|program| {
             let name = program.rsplit('/').next().unwrap_or(program);
             name.trim_start_matches('-').to_string()

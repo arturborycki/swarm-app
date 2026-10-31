@@ -139,6 +139,10 @@ pub enum WorkspaceAction {
     SwarmNewSession { host: Option<String> },
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
+    /// swarm-term: the detached sessions menu, opened from the sidebar's footer.
+    SwarmShowDetachedMenuFromSidebar,
+    /// swarm-term: the hosts menu, opened from the sidebar's footer.
+    SwarmShowHostsMenuFromSidebar,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1145,6 +1149,8 @@ impl WorkspaceAction {
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
             | SwarmRetryConnections
+            | SwarmShowDetachedMenuFromSidebar
+            | SwarmShowHostsMenuFromSidebar
             | Reauth
             | SignupAnonymousUser
             | LogOut

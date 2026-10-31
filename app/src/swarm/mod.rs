@@ -195,6 +195,15 @@ pub fn use_daemon_sessions() -> bool {
     false
 }
 
+/// `path` with this Mac's home folder shown as `~`.
+pub fn home_relative(path: &str) -> String {
+    match dirs::home_dir().and_then(|home| std::path::Path::new(path).strip_prefix(home).ok().map(|r| r.display().to_string())) {
+        Some(rest) if rest.is_empty() => "~".to_string(),
+        Some(rest) => format!("~/{rest}"),
+        None => path.to_string(),
+    }
+}
+
 /// After a wake or a network change: remote tabs whose link died reconnect
 /// now rather than when ssh notices.
 pub fn check_daemon_links() {

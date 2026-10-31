@@ -1688,17 +1688,23 @@ fn render_vertical_tabs_panel(
     .with_overlayed_scrollbar()
     .finish();
 
-    let panel_content = Flex::column()
+    let mut panel_content = Flex::column()
         .with_main_axis_size(MainAxisSize::Max)
-        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-        .with_child(render_control_bar(
-            state,
-            workspace,
-            &workspace.vertical_tabs_search_input,
-            app,
-        ))
-        .with_child(Shrinkable::new(1., scrollable_groups).finish())
-        .finish();
+        .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
+    if crate::swarm::SWARM_CHROME {
+        panel_content.add_child(render_swarm_panel_header(workspace, appearance));
+    }
+    panel_content.add_child(render_control_bar(
+        state,
+        workspace,
+        &workspace.vertical_tabs_search_input,
+        app,
+    ));
+    panel_content.add_child(Shrinkable::new(1., scrollable_groups).finish());
+    if crate::swarm::SWARM_CHROME {
+        panel_content.add_child(render_swarm_panel_footer(workspace, appearance, app));
+    }
+    let panel_content = panel_content.finish();
 
     // Catch-all drop target so a pane dragged into any gap not covered by a
     // row, group-header, or member target (between groups, below the last tab)
@@ -1760,6 +1766,102 @@ fn render_vertical_tabs_panel(
             let max_width = window_size.x() * MAX_PANEL_WIDTH_RATIO;
             (MIN_PANEL_WIDTH, max_width.max(MIN_PANEL_WIDTH))
         }))
+        .finish()
+}
+
+/// swarm-term: "SESSIONS · 5 OPEN" over the filter field (sidebar mockup).
+fn render_swarm_panel_header(workspace: &Workspace, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let label = format!("SESSIONS  ·  {} OPEN", workspace.tabs.len());
+    Container::new(
+        Text::new_inline(label, appearance.ui_font_family(), 11.)
+            .with_color(theme.sub_text_color(theme.background()).into())
+            .with_style(Properties::default().weight(Weight::Semibold))
+            .finish(),
+    )
+    .with_padding_left(12.)
+    .with_padding_right(12.)
+    .with_padding_top(10.)
+    .with_padding_bottom(2.)
+    .finish()
+}
+
+/// swarm-term: the sidebar's footer: "N detached" (while sessions run with
+/// nothing attached) and "Connect…", each opening its menu upward.
+fn render_swarm_panel_footer(workspace: &Workspace, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let font = appearance.ui_font_family();
+    let text_color = theme.main_text_color(theme.background());
+    #[cfg(unix)]
+    let detached = crate::swarm::sessions::SwarmSessions::as_ref(app).detached().count();
+    #[cfg(not(unix))]
+    let detached = {
+        let _ = app;
+        0
+    };
+
+    let button = |label: String,
+                  mouse_state: MouseStateHandle,
+                  prominent: bool,
+                  action: WorkspaceAction,
+                  position_id: &'static str| {
+        let accent = theme.accent();
+        let hoverable = Hoverable::new(mouse_state, move |state| {
+            let background = match (prominent, state.is_hovered()) {
+                (true, false) => accent.with_opacity(25),
+                (true, true) => accent.with_opacity(40),
+                (false, false) => WarpThemeFill::Solid(ColorU::transparent_black()),
+                (false, true) => internal_colors::fg_overlay_2(theme),
+            };
+            Container::new(
+                Align::new(
+                    Text::new_inline(label.clone(), font, 12.)
+                        .with_color(text_color.into())
+                        .with_clip(ClipConfig::ellipsis())
+                        .finish(),
+                )
+                .finish(),
+            )
+            .with_background(background)
+            .with_border(Border::all(1.).with_border_fill(if prominent {
+                WarpThemeFill::Solid(ColorU::transparent_black())
+            } else {
+                internal_colors::fg_overlay_3(theme)
+            }))
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
+            .with_padding_top(5.)
+            .with_padding_bottom(5.)
+            .finish()
+        })
+        .with_cursor(Cursor::PointingHand)
+        .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
+        .finish();
+        Expanded::new(1., SavePosition::new(hoverable, position_id).finish()).finish()
+    };
+
+    let mut row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(6.);
+    if detached > 0 {
+        row.add_child(button(
+            format!("{detached} detached"),
+            workspace.mouse_states.swarm_sidebar_detached_button.clone(),
+            true,
+            WorkspaceAction::SwarmShowDetachedMenuFromSidebar,
+            super::SWARM_SIDEBAR_DETACHED_POSITION_ID,
+        ));
+    }
+    row.add_child(button(
+        "Connect…".to_string(),
+        workspace.mouse_states.swarm_sidebar_connect_button.clone(),
+        false,
+        WorkspaceAction::SwarmShowHostsMenuFromSidebar,
+        super::SWARM_SIDEBAR_CONNECT_POSITION_ID,
+    ));
+    Container::new(row.finish())
+        .with_padding(Padding::uniform(10.))
+        .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_2(theme)))
         .finish()
 }
 

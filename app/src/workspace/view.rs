@@ -608,6 +608,9 @@ const SWARM_DETACHED_BUTTON_POSITION_ID: &str = "workspace_view:swarm_detached_b
 /// Height of the status bar under the active session.
 const SWARM_STATUS_BAR_HEIGHT: f32 = 24.;
 const SWARM_CONNECT_BUTTON_POSITION_ID: &str = "workspace_view:swarm_connect_button";
+/// The sidebar footer's "N detached" and "Connect…" buttons.
+const SWARM_SIDEBAR_DETACHED_POSITION_ID: &str = "workspace_view:swarm_sidebar_detached_button";
+const SWARM_SIDEBAR_CONNECT_POSITION_ID: &str = "workspace_view:swarm_sidebar_connect_button";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TeamNavigationMode {
@@ -1146,6 +1149,9 @@ pub struct Workspace {
     show_team_switcher_menu: bool,
     swarm_detached_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_swarm_detached_menu: bool,
+    /// The detached and hosts menus were opened from the sidebar's footer
+    /// (they open upward from there) rather than the title bar.
+    swarm_menus_from_sidebar: bool,
     swarm_hosts_menu: ViewHandle<Menu<WorkspaceAction>>,
     show_swarm_hosts_menu: bool,
     theme_creator_modal: ViewHandle<ThemeCreatorModal>,
@@ -1441,7 +1447,8 @@ impl Workspace {
             EditorView::single_line(options, ctx)
         });
         editor.update(ctx, |editor, ctx| {
-            editor.set_placeholder_text("Search tabs...", ctx);
+            let placeholder = if crate::swarm::SWARM_CHROME { "Filter sessions" } else { "Search tabs..." };
+            editor.set_placeholder_text(placeholder, ctx);
         });
         ctx.subscribe_to_view(&editor, |me, editor_view, event, ctx| match event {
             EditorEvent::Edited(_) => {
@@ -3557,6 +3564,7 @@ impl Workspace {
             show_team_switcher_menu: false,
             swarm_detached_menu: Self::build_swarm_detached_menu(ctx),
             show_swarm_detached_menu: false,
+            swarm_menus_from_sidebar: false,
             swarm_hosts_menu: Self::build_swarm_hosts_menu(ctx),
             show_swarm_hosts_menu: false,
             is_user_menu_open: false,
@@ -6353,7 +6361,8 @@ impl Workspace {
     }
 
     fn build_swarm_detached_menu(ctx: &mut ViewContext<Self>) -> ViewHandle<Menu<WorkspaceAction>> {
-        let menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
+        // Wide enough for "name   folder   command" on one line.
+        let menu = ctx.add_typed_action_view(|_| Menu::new().with_width(380.).with_drop_shadow());
         ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
             if let MenuEvent::Close { .. } = event {
                 me.show_swarm_detached_menu = false;
@@ -6772,7 +6781,7 @@ impl Workspace {
             .detached()
             .map(|s| {
                 let what = s.foreground.clone().unwrap_or_else(|| "idle".to_string());
-                let cwd = s.cwd.clone().unwrap_or_default();
+                let cwd = crate::swarm::home_relative(s.cwd.as_deref().unwrap_or_default());
                 let label = format!("{}   {cwd}   {what}", s.display_name());
                 let tab = crate::swarm::ReattachTab::for_session(None, s);
                 let label = if tab.has_warp_integration() { label } else { format!("{label}   (no blocks)") };
@@ -26326,11 +26335,13 @@ impl TypedActionView for Workspace {
             OpenHeaderToolbarEditor => {
                 self.open_header_toolbar_editor(ctx);
             }
-            SwarmShowDetachedMenu => {
+            SwarmShowDetachedMenu | SwarmShowDetachedMenuFromSidebar => {
+                self.swarm_menus_from_sidebar = matches!(action, SwarmShowDetachedMenuFromSidebar);
                 #[cfg(unix)]
                 self.show_swarm_detached_menu(ctx);
             }
-            SwarmShowHostsMenu => {
+            SwarmShowHostsMenu | SwarmShowHostsMenuFromSidebar => {
+                self.swarm_menus_from_sidebar = matches!(action, SwarmShowHostsMenuFromSidebar);
                 #[cfg(unix)]
                 self.show_swarm_hosts_menu(ctx);
             }
@@ -27962,29 +27973,38 @@ impl View for Workspace {
             );
         }
 
-        if self.show_swarm_hosts_menu {
-            stack.add_positioned_overlay_child(
-                ChildView::new(&self.swarm_hosts_menu).finish(),
+        // From the title bar the menus drop down; from the sidebar's footer
+        // they open upward.
+        let swarm_menu_position = |title_bar_id: &'static str, sidebar_id: &'static str| {
+            if self.swarm_menus_from_sidebar {
                 OffsetPositioning::offset_from_save_position_element(
-                    SWARM_CONNECT_BUTTON_POSITION_ID,
+                    sidebar_id,
+                    vec2f(0., -4.),
+                    PositionedElementOffsetBounds::WindowByPosition,
+                    PositionedElementAnchor::TopLeft,
+                    ChildAnchor::BottomLeft,
+                )
+            } else {
+                OffsetPositioning::offset_from_save_position_element(
+                    title_bar_id,
                     vec2f(0., 4.),
                     PositionedElementOffsetBounds::WindowByPosition,
                     PositionedElementAnchor::BottomRight,
                     ChildAnchor::TopRight,
-                ),
+                )
+            }
+        };
+        if self.show_swarm_hosts_menu {
+            stack.add_positioned_overlay_child(
+                ChildView::new(&self.swarm_hosts_menu).finish(),
+                swarm_menu_position(SWARM_CONNECT_BUTTON_POSITION_ID, SWARM_SIDEBAR_CONNECT_POSITION_ID),
             );
         }
 
         if self.show_swarm_detached_menu {
             stack.add_positioned_overlay_child(
                 ChildView::new(&self.swarm_detached_menu).finish(),
-                OffsetPositioning::offset_from_save_position_element(
-                    SWARM_DETACHED_BUTTON_POSITION_ID,
-                    vec2f(0., 4.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::BottomRight,
-                    ChildAnchor::TopRight,
-                ),
+                swarm_menu_position(SWARM_DETACHED_BUTTON_POSITION_ID, SWARM_SIDEBAR_DETACHED_POSITION_ID),
             );
         }
 
