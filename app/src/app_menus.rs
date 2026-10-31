@@ -290,7 +290,7 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             MenuItem::Separator,
             // ⇧⌘K (DESIGN §9b) clears lines in the input editor and ⌃⌘K opens
             // the keyboard shortcuts; ⌃⌘H (host) is free.
-            swarm_workspace_item_with_key("Connect to Host…", WorkspaceAction::SwarmShowHostsMenu, Some("ctrl-cmd-h")),
+            swarm_workspace_item_with_key("Connect to Host…", WorkspaceAction::SwarmShowConnect, Some("ctrl-cmd-h")),
         ]);
     }
     file_menu_options.extend([

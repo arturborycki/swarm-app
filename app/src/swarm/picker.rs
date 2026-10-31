@@ -25,6 +25,7 @@ use warpui::{AppContext, Entity, SingletonEntity as _, TypedActionView, View, Vi
 use warpui::elements::Hoverable;
 
 use super::ReattachTab;
+use super::widgets::ButtonStyle;
 use super::sessions::{SessionMark, SwarmSessions};
 use crate::appearance::Appearance;
 use crate::editor::{EditorView, Event as EditorEvent, PropagateAndNoOpNavigationKeys, SingleLineEditorOptions, TextOptions};
@@ -309,49 +310,7 @@ impl View for SwarmPicker {
             Text::new_inline(s, font, size).with_color(color.into()).with_clip(ClipConfig::ellipsis()).finish()
         };
         let button = |label: String, key: &str, style: ButtonStyle, enabled: bool, action: SwarmPickerAction| {
-            let mouse = self.mouse_for(key);
-            let hoverable = Hoverable::new(mouse, move |state| {
-                let hovered = enabled && state.is_hovered();
-                let (background, border, color) = match style {
-                    ButtonStyle::Primary if enabled => (
-                        if hovered { accent.with_opacity(90) } else { accent },
-                        Fill::Solid(warpui::color::ColorU::transparent_black()),
-                        Fill::Solid(warpui::color::ColorU::white()),
-                    ),
-                    ButtonStyle::Link => (
-                        if hovered { internal_colors::fg_overlay_2(theme) } else { Fill::Solid(warpui::color::ColorU::transparent_black()) },
-                        Fill::Solid(warpui::color::ColorU::transparent_black()),
-                        accent,
-                    ),
-                    _ => (
-                        if hovered { internal_colors::fg_overlay_2(theme) } else { Fill::Solid(warpui::color::ColorU::transparent_black()) },
-                        internal_colors::fg_overlay_3(theme),
-                        if enabled { main } else { theme.disabled_ui_text_color() },
-                    ),
-                };
-                Container::new(
-                    Text::new_inline(label.clone(), font, 12.)
-                        .with_color(color.into())
-                        .with_style(Properties::default().weight(Weight::Semibold))
-                        .finish(),
-                )
-                .with_background(background)
-                .with_border(Border::all(1.).with_border_fill(border))
-                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(6.)))
-                .with_padding_left(12.)
-                .with_padding_right(12.)
-                .with_padding_top(6.)
-                .with_padding_bottom(6.)
-                .finish()
-            });
-            let hoverable = if enabled {
-                hoverable
-                    .with_cursor(Cursor::PointingHand)
-                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(action.clone()))
-            } else {
-                hoverable
-            };
-            hoverable.finish()
+            super::widgets::button(appearance, self.mouse_for(key), label, style, enabled, action)
         };
 
         // Header: title and one segment per host.
@@ -665,11 +624,4 @@ impl View for SwarmPicker {
         .on_left_mouse_down(|_, _, _| DispatchEventResult::StopPropagation)
         .finish()
     }
-}
-
-#[derive(Clone, Copy)]
-enum ButtonStyle {
-    Primary,
-    Plain,
-    Link,
 }

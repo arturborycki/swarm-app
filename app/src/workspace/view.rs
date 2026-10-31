@@ -608,8 +608,6 @@ const SWARM_DETACHED_BUTTON_POSITION_ID: &str = "workspace_view:swarm_detached_b
 /// Height of the status bar under the active session.
 const SWARM_STATUS_BAR_HEIGHT: f32 = 24.;
 const SWARM_CONNECT_BUTTON_POSITION_ID: &str = "workspace_view:swarm_connect_button";
-/// The sidebar footer's "Connect…" button.
-const SWARM_SIDEBAR_CONNECT_POSITION_ID: &str = "workspace_view:swarm_sidebar_connect_button";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TeamNavigationMode {
@@ -1150,11 +1148,10 @@ pub struct Workspace {
     #[cfg(unix)]
     swarm_picker: ViewHandle<crate::swarm::picker::SwarmPicker>,
     show_swarm_picker: bool,
-    /// The hosts menu was opened from the sidebar's footer (it opens upward
-    /// from there) rather than the title bar.
-    swarm_menus_from_sidebar: bool,
-    swarm_hosts_menu: ViewHandle<Menu<WorkspaceAction>>,
-    show_swarm_hosts_menu: bool,
+    /// The connect sheet (Connect…, ⌃⌘H).
+    #[cfg(unix)]
+    swarm_connect: ViewHandle<crate::swarm::connect::SwarmConnect>,
+    show_swarm_connect: bool,
     theme_creator_modal: ViewHandle<ThemeCreatorModal>,
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
@@ -3566,9 +3563,9 @@ impl Workspace {
             #[cfg(unix)]
             swarm_picker: Self::build_swarm_picker(ctx),
             show_swarm_picker: false,
-            swarm_menus_from_sidebar: false,
-            swarm_hosts_menu: Self::build_swarm_hosts_menu(ctx),
-            show_swarm_hosts_menu: false,
+            #[cfg(unix)]
+            swarm_connect: Self::build_swarm_connect(ctx),
+            show_swarm_connect: false,
             is_user_menu_open: false,
             tab_bar_pinned_by_popup: false,
             user_menu,
@@ -6362,24 +6359,6 @@ impl Workspace {
         menu
     }
 
-    fn build_swarm_hosts_menu(ctx: &mut ViewContext<Self>) -> ViewHandle<Menu<WorkspaceAction>> {
-        let menu = ctx.add_typed_action_view(|_| Menu::new().with_drop_shadow());
-        ctx.subscribe_to_view(&menu, |me, _, event, ctx| {
-            if let MenuEvent::Close { .. } = event {
-                me.show_swarm_hosts_menu = false;
-                ctx.notify();
-            }
-        });
-        menu
-    }
-
-    fn open_swarm_hosts_menu(&mut self, items: Vec<MenuItem<WorkspaceAction>>, ctx: &mut ViewContext<Self>) {
-        self.swarm_hosts_menu.update(ctx, |menu, ctx| menu.set_items(items, ctx));
-        self.show_swarm_hosts_menu = true;
-        ctx.focus(&self.swarm_hosts_menu);
-        ctx.notify();
-    }
-
     /// The first-run sheet (DESIGN §3a): what Swarm does differently, when the
     /// session daemon starts, and an optional first remote host.
     #[cfg(unix)]
@@ -6403,7 +6382,7 @@ impl Workspace {
                     });
                     let _ = me;
                 }),
-                ModalButton::for_view("Connect to a Server…", |me: &mut Self, ctx| me.show_swarm_hosts_menu(ctx)),
+                ModalButton::for_view("Connect to a Server…", |me: &mut Self, ctx| me.show_swarm_connect(None, ctx)),
             ],
             |_, _| {},
         )
@@ -6420,126 +6399,40 @@ impl Workspace {
         ctx.show_native_platform_modal(dialog);
     }
 
-    /// The ssh hosts from `~/.ssh/config`; picking one connects to it.
+    /// Shows the connect sheet, checking `host` right away if given.
     #[cfg(unix)]
-    fn show_swarm_hosts_menu(&mut self, ctx: &mut ViewContext<Self>) {
-        let mut items: Vec<_> = warp_terminal::local_tty::daemon::ssh_hosts()
-            .into_iter()
-            .map(|host| {
-                MenuItemFields::new(host.clone())
-                    .with_on_select_action(WorkspaceAction::SwarmConnectHost(host))
-                    .into_item()
-            })
-            .collect();
-        if items.is_empty() {
-            items.push(MenuItemFields::new("No hosts in ~/.ssh/config").with_disabled(true).into_item());
-        }
-        // Any other host: typed as user@host in the session picker.
-        items.push(
-            MenuItemFields::new("Other Host…")
-                .with_on_select_action(WorkspaceAction::TogglePalette {
-                    mode: PaletteMode::Navigation,
-                    source: PaletteSource::Keybinding,
-                })
-                .into_item(),
-        );
-        self.open_swarm_hosts_menu(items, ctx);
-    }
-
-    /// Checks ssh access and swarmd on `host`, then lists its sessions, offers
-    /// to install swarmd, or explains what's wrong.
-    #[cfg(unix)]
-    fn connect_swarm_host(&mut self, host: String, ctx: &mut ViewContext<Self>) {
-        use warp_terminal::local_tty::daemon::{self, HostCheck};
-        let Some(daemons) = daemon::daemons() else { return };
-        let probe = host.clone();
-        let rx = daemons.run(async move { daemon::check_host(&probe).await });
-        let _ = ctx.spawn(async move { rx.recv().await }, move |me, check, ctx| match check {
-            Ok(HostCheck::Ready) => {
-                daemon::remember_host(&host);
-                me.show_swarm_host_sessions(host, ctx)
-            }
-            Ok(HostCheck::NeedsInstall { os, installable: true }) => {
-                let install_host = host.clone();
-                let dialog = AlertDialogWithCallbacks::for_view(
-                    format!("Install swarmd on {host}?"),
-                    format!(
-                        "{host} ({os}) doesn't have the Swarm session daemon yet. Swarm will copy swarmd, \
-                         swarm-shim and swarmctl from this app to ~/.local/share/swarm/bin on {host}. \
-                         No admin rights are needed."
-                    ),
-                    vec![
-                        ModalButton::for_view("Install", move |me: &mut Self, ctx| {
-                            me.install_swarm_host(install_host, ctx)
-                        }),
-                        ModalButton::for_view("Cancel", |_, _| {}),
-                    ],
-                    |_, _| {},
-                )
-                .without_dont_ask_again();
-                ctx.show_native_platform_modal(dialog);
-            }
-            Ok(HostCheck::NeedsInstall { os, installable: false }) => me.swarm_alert(
-                format!("swarmd isn't installed on {host}"),
-                format!(
-                    "{host} runs {os}, and this build of Swarm only includes binaries for this Mac. \
-                     Build swarm-term on {host} (cargo build -p swarmd -p swarmctl) and copy swarmd and \
-                     swarm-shim to ~/.local/share/swarm/bin there, then connect again."
-                ),
-                ctx,
-            ),
-            Ok(HostCheck::Unreachable(message)) => {
-                me.swarm_alert(format!("Couldn't connect to {host}"), message, ctx)
-            }
-            Err(_) => {}
-        });
+    fn show_swarm_connect(&mut self, host: Option<String>, ctx: &mut ViewContext<Self>) {
+        self.show_swarm_picker = false;
+        self.swarm_connect.update(ctx, |sheet, ctx| sheet.open(host, ctx));
+        self.show_swarm_connect = true;
+        ctx.notify();
     }
 
     #[cfg(unix)]
-    fn install_swarm_host(&mut self, host: String, ctx: &mut ViewContext<Self>) {
-        use warp_terminal::local_tty::daemon;
-        let Some(daemons) = daemon::daemons() else { return };
-        let target = host.clone();
-        let rx = daemons.run(async move { daemon::install_swarmd(&target).await });
-        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
-            Ok(Ok(())) => me.connect_swarm_host(host, ctx),
-            Ok(Err(e)) => me.swarm_alert(format!("Couldn't install swarmd on {host}"), format!("{e:#}"), ctx),
-            Err(_) => {}
-        });
+    fn hide_swarm_connect(&mut self, ctx: &mut ViewContext<Self>) {
+        self.show_swarm_connect = false;
+        self.focus_active_tab(ctx);
+        ctx.notify();
     }
 
-    /// `host`'s sessions, to open as tabs, plus a new one.
     #[cfg(unix)]
-    fn show_swarm_host_sessions(&mut self, host: String, ctx: &mut ViewContext<Self>) {
-        use warp_terminal::local_tty::daemon;
-        crate::swarm::sessions::SwarmSessions::handle(ctx).update(ctx, |sessions, ctx| {
-            sessions.watch_host(host.clone(), ctx)
-        });
-        let Some(daemons) = daemon::daemons() else { return };
-        let target = host.clone();
-        let rx = daemons.run(async move { daemon::list_sessions(Some(&target)).await });
-        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
-            Ok(Ok(sessions)) => {
-                let mut items = vec![MenuItemFields::new(format!("New session on {host}"))
-                    .with_on_select_action(WorkspaceAction::SwarmNewSession { host: Some(host.clone()) })
-                    .into_item()];
-                for s in sessions.iter().filter(|s| s.is_running()) {
-                    let what = s.foreground.clone().unwrap_or_else(|| "idle".to_string());
-                    let cwd = s.cwd.clone().unwrap_or_default();
-                    let mut label = format!("{}   {cwd}   {what}", s.display_name());
-                    if !s.clients.is_empty() {
-                        label.push_str("   (open elsewhere)");
-                    }
-                    let tab = crate::swarm::ReattachTab::for_session(Some(&host), s);
-                    items.push(
-                        MenuItemFields::new(label).with_on_select_action(WorkspaceAction::SwarmReattach(tab)).into_item(),
-                    );
-                }
-                me.open_swarm_hosts_menu(items, ctx);
+    fn build_swarm_connect(ctx: &mut ViewContext<Self>) -> ViewHandle<crate::swarm::connect::SwarmConnect> {
+        use crate::swarm::connect::{SwarmConnect, SwarmConnectEvent};
+        let sheet = ctx.add_typed_action_view(SwarmConnect::new);
+        ctx.subscribe_to_view(&sheet, |me, _, event, ctx| match event {
+            SwarmConnectEvent::Close => me.hide_swarm_connect(ctx),
+            SwarmConnectEvent::ChooseSessions(host) => {
+                warp_terminal::local_tty::daemon::remember_host(host);
+                crate::swarm::sessions::SwarmSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.watch_host(host.clone(), ctx)
+                });
+                me.show_swarm_connect = false;
+                me.swarm_picker.update(ctx, |picker, ctx| picker.open_on(Some(host.clone()), ctx));
+                me.show_swarm_picker = true;
+                ctx.notify();
             }
-            Ok(Err(e)) => me.swarm_alert(format!("Couldn't list sessions on {host}"), format!("{e:#}"), ctx),
-            Err(_) => {}
         });
+        sheet
     }
 
     /// In the background, brings back as tabs the sessions on hosts the user
@@ -21830,7 +21723,7 @@ impl Workspace {
             .finish()
         })
         .with_cursor(Cursor::PointingHand)
-        .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmShowHostsMenu))
+        .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmShowConnect))
         .finish();
         row.add_child(
             Container::new(SavePosition::new(connect, SWARM_CONNECT_BUTTON_POSITION_ID).finish())
@@ -26341,14 +26234,17 @@ impl TypedActionView for Workspace {
                 #[cfg(unix)]
                 self.toggle_swarm_picker(ctx);
             }
-            SwarmShowHostsMenu | SwarmShowHostsMenuFromSidebar => {
-                self.swarm_menus_from_sidebar = matches!(action, SwarmShowHostsMenuFromSidebar);
+            SwarmShowConnect => {
                 #[cfg(unix)]
-                self.show_swarm_hosts_menu(ctx);
+                if self.show_swarm_connect {
+                    self.hide_swarm_connect(ctx);
+                } else {
+                    self.show_swarm_connect(None, ctx);
+                }
             }
             SwarmConnectHost(host) => {
                 #[cfg(unix)]
-                self.connect_swarm_host(host.clone(), ctx);
+                self.show_swarm_connect(Some(host.clone()), ctx);
             }
             SwarmNewSession { host } => {
                 #[cfg(unix)]
@@ -27974,31 +27870,20 @@ impl View for Workspace {
             );
         }
 
-        // From the title bar the menus drop down; from the sidebar's footer
-        // they open upward.
-        let swarm_menu_position = |title_bar_id: &'static str, sidebar_id: &'static str| {
-            if self.swarm_menus_from_sidebar {
-                OffsetPositioning::offset_from_save_position_element(
-                    sidebar_id,
-                    vec2f(0., -4.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::TopLeft,
-                    ChildAnchor::BottomLeft,
-                )
-            } else {
-                OffsetPositioning::offset_from_save_position_element(
-                    title_bar_id,
-                    vec2f(0., 4.),
-                    PositionedElementOffsetBounds::WindowByPosition,
-                    PositionedElementAnchor::BottomRight,
-                    ChildAnchor::TopRight,
-                )
-            }
-        };
-        if self.show_swarm_hosts_menu {
+        #[cfg(unix)]
+        if self.show_swarm_connect {
+            // A sheet under the title bar, centered.
             stack.add_positioned_overlay_child(
-                ChildView::new(&self.swarm_hosts_menu).finish(),
-                swarm_menu_position(SWARM_CONNECT_BUTTON_POSITION_ID, SWARM_SIDEBAR_CONNECT_POSITION_ID),
+                Dismiss::new(ChildView::new(&self.swarm_connect).finish())
+                    .prevent_interaction_with_other_elements()
+                    .on_dismiss(|ctx, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmShowConnect))
+                    .finish(),
+                OffsetPositioning::offset_from_parent(
+                    vec2f(0., 56.),
+                    ParentOffsetBounds::ParentByPosition,
+                    ParentAnchor::TopMiddle,
+                    ChildAnchor::TopMiddle,
+                ),
             );
         }
 

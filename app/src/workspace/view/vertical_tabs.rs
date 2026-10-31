@@ -1856,8 +1856,8 @@ fn render_swarm_panel_footer(workspace: &Workspace, appearance: &Appearance, app
         "Connect…".to_string(),
         workspace.mouse_states.swarm_sidebar_connect_button.clone(),
         false,
-        WorkspaceAction::SwarmShowHostsMenuFromSidebar,
-        super::SWARM_SIDEBAR_CONNECT_POSITION_ID,
+        WorkspaceAction::SwarmShowConnect,
+        "workspace_view:swarm_sidebar_connect_button",
     ));
     Container::new(row.finish())
         .with_padding(Padding::uniform(10.))

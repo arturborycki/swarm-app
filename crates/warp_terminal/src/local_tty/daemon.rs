@@ -876,6 +876,25 @@ pub async fn check_host(host: &str) -> HostCheck {
     HostCheck::NeedsInstall { installable: bundled_swarmd_dir(&os).is_some(), os }
 }
 
+/// Whether systemd keeps `host`'s user processes after logout (`loginctl
+/// enable-linger`); `None` where that doesn't apply (no systemd, macOS).
+pub async fn linger(host: &str) -> Option<bool> {
+    let output = ssh(host, r#"loginctl show-user "$USER" -p Linger 2>/dev/null"#).await.ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let value = stdout.trim().strip_prefix("Linger=")?;
+    Some(value == "yes")
+}
+
+/// `user@hostname` that ssh would use for `alias`, from `ssh -G` (reads the
+/// config only; doesn't connect).
+pub async fn ssh_destination(alias: &str) -> Option<String> {
+    let output = tokio::process::Command::new("ssh").args(["-G", alias]).output().await.ok()?;
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let field = |key: &str| stdout.lines().find_map(|l| l.strip_prefix(key)).map(str::trim).map(str::to_string);
+    let (user, hostname) = (field("user ")?, field("hostname ")?);
+    Some(format!("{user}@{hostname}"))
+}
+
 /// Copies this app's `swarmd`, `swarm-shim` and `swarmctl` for `host`'s
 /// platform to the per-user bin dir there.
 pub async fn install_swarmd(host: &str) -> Result<()> {

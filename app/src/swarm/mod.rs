@@ -6,9 +6,13 @@
 //! here so the diff against upstream stays easy to find.
 
 #[cfg(unix)]
+pub mod connect;
+#[cfg(unix)]
 pub mod picker;
 #[cfg(unix)]
 pub mod sessions;
+#[cfg(unix)]
+pub mod widgets;
 
 /// Swarm's own window chrome (title bar, session menus) instead of Warp's.
 pub const SWARM_CHROME: bool = true;

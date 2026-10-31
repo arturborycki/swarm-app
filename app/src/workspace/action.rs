@@ -131,16 +131,14 @@ pub enum WorkspaceAction {
     SwarmShowPicker,
     /// swarm-term: open a tab attached to a running daemon session.
     SwarmReattach(crate::swarm::ReattachTab),
-    /// swarm-term: list ssh hosts to connect to.
-    SwarmShowHostsMenu,
-    /// swarm-term: connect to a host's daemon and list its sessions.
+    /// swarm-term: show (or hide) the connect sheet.
+    SwarmShowConnect,
+    /// swarm-term: open the connect sheet checking this host.
     SwarmConnectHost(String),
     /// swarm-term: start a session on a host (`None`: this Mac) and open it.
     SwarmNewSession { host: Option<String> },
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
-    /// swarm-term: the hosts menu, opened from the sidebar's footer.
-    SwarmShowHostsMenuFromSidebar,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1143,11 +1141,10 @@ impl WorkspaceAction {
             | ShowHeaderToolbarContextMenu { .. }
             | SwarmShowPicker
             | SwarmReattach(_)
-            | SwarmShowHostsMenu
+            | SwarmShowConnect
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
             | SwarmRetryConnections
-            | SwarmShowHostsMenuFromSidebar
             | Reauth
             | SignupAnonymousUser
             | LogOut
