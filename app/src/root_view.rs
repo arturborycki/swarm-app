@@ -330,6 +330,12 @@ pub fn init(app: &mut AppContext) {
     );
     app.add_global_action("root_view:open_launch_config", open_launch_config);
     app.add_global_action("root_view:send_feedback", send_feedback);
+    // swarm-term: menu items acting on the active window.
+    app.add_global_action("root_view:workspace_action", |action: &WorkspaceAction, ctx| {
+        if let Some(workspace) = active_workspace(ctx) {
+            workspace.update(ctx, |workspace, ctx| workspace.handle_action(action, ctx));
+        }
+    });
     app.add_global_action(
         "root_view:toggle_quake_mode_window",
         toggle_quake_mode_window,

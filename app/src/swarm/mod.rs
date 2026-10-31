@@ -14,6 +14,9 @@ pub const SWARM_CHROME: bool = true;
 /// The product name shown in menus and titles.
 pub const APP_NAME: &str = "Swarm";
 
+/// Where Swarm's source, docs and issues live (the Help menu).
+pub const REPO_URL: &str = "https://github.com/arturborycki/swarm-term";
+
 /// Swarm opens straight into a terminal: no Warp welcome, onboarding or login
 /// screen. Warp's cloud sign-in stays available but opt-in.
 pub const SKIP_WARP_ONBOARDING: bool = true;

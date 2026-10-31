@@ -37,6 +37,7 @@ use crate::user_config::WarpConfig;
 use crate::util::bindings::{self, CustomAction, trigger_to_keystroke};
 use crate::util::links;
 use crate::workspace::sync_inputs::SyncedInputState;
+use crate::workspace::WorkspaceAction;
 
 type CheckmarkStatusGetter = dyn 'static + Fn(&mut AppContext) -> bool;
 
@@ -63,6 +64,18 @@ const MAX_RECENT_REPOS_IN_MENU: usize = 10;
 
 /// Creates the root app menu bar
 pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
+    if crate::swarm::SWARM_CHROME {
+        return MenuBar::new(vec![
+            make_new_app_menu(ctx),
+            make_new_file_menu(ctx),
+            make_new_edit_menu(ctx),
+            make_new_view_menu(ctx),
+            make_new_tab_menu(ctx),
+            make_new_blocks_menu(ctx),
+            make_new_window_menu(),
+            make_new_help_menu(),
+        ]);
+    }
     MenuBar::new(vec![
         make_new_app_menu(ctx),
         make_new_file_menu(ctx),
@@ -139,6 +152,9 @@ fn updateable_custom_item_without_checkmark(action: CustomAction, ctx: &AppConte
 }
 
 fn make_new_app_menu(ctx: &AppContext) -> Menu {
+    if crate::swarm::SWARM_CHROME {
+        return make_swarm_app_menu(ctx);
+    }
     let mut menu_items = vec![updateable_custom_item_without_checkmark(
         CustomAction::ShowAboutWarp,
         ctx,
@@ -250,6 +266,26 @@ fn make_new_app_menu(ctx: &AppContext) -> Menu {
 
 fn make_new_file_menu(ctx: &AppContext) -> Menu {
     let mut file_menu_options = make_new_elements_menu_items(ctx);
+    if crate::swarm::SWARM_CHROME {
+        // No agent tabs (Warp AI), and closed tabs aren't held for undo: their
+        // sessions keep running and are reopened from the detached list.
+        file_menu_options.retain(|item| {
+            !matches!(item, MenuItem::Custom(c) if ["New Agent Tab", "Reopen closed session"].contains(&c.properties.name.as_str()))
+        });
+        file_menu_options = file_menu_options
+            .into_iter()
+            .map(|item| match &item {
+                MenuItem::Custom(c) if c.properties.name == "New Terminal Tab" => swarm_relabel(item, "New Session"),
+                _ => item,
+            })
+            .collect();
+        file_menu_options.insert(2, swarm_new_session_on_host_menu());
+        file_menu_options.extend([
+            MenuItem::Separator,
+            swarm_workspace_item("Connect to Host…", WorkspaceAction::SwarmShowHostsMenu),
+            swarm_workspace_item("Detached Sessions…", WorkspaceAction::SwarmShowDetachedMenu),
+        ]);
+    }
     file_menu_options.extend([
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::OpenRepository, ctx),
@@ -268,7 +304,12 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             vec![],
         )),
         MenuItem::Separator,
-        updateable_custom_item_without_checkmark(CustomAction::CloseCurrentSession, ctx),
+        if crate::swarm::SWARM_CHROME {
+            // Closing detaches: the session keeps running.
+            swarm_relabel(updateable_custom_item_without_checkmark(CustomAction::CloseCurrentSession, ctx), "Close Tab")
+        } else {
+            updateable_custom_item_without_checkmark(CustomAction::CloseCurrentSession, ctx)
+        },
         updateable_custom_item_without_checkmark(CustomAction::CloseWindow, ctx),
     ]);
 
@@ -374,7 +415,12 @@ fn make_new_edit_menu(ctx: &AppContext) -> Menu {
 }
 
 fn make_new_view_menu(ctx: &AppContext) -> Menu {
-    let mut items = vec![
+    let mut items = Vec::new();
+    if crate::swarm::SWARM_CHROME {
+        // Sessions in the sidebar, or as tabs across the title bar.
+        items.push(swarm_workspace_item("Show or Hide Sessions Sidebar", WorkspaceAction::ToggleVerticalTabsPanel));
+    }
+    items.extend(vec![
         updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::CommandPalette, ctx),
@@ -435,7 +481,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             },
             None,
         )),
-    ];
+    ]);
 
     let is_compact_mode = matches!(
         TerminalSettings::handle(ctx)
@@ -488,8 +534,10 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
 }
 
 fn make_new_tab_menu(ctx: &AppContext) -> Menu {
+    let rename = updateable_custom_item_without_checkmark(CustomAction::RenameTab, ctx);
     let items = vec![
-        updateable_custom_item_without_checkmark(CustomAction::RenameTab, ctx),
+        // In Swarm the tab's name is its session's name in the daemon.
+        if crate::swarm::SWARM_CHROME { swarm_relabel(rename, "Rename Session…") } else { rename },
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::SplitPaneRight, ctx),
         updateable_custom_item_without_checkmark(CustomAction::SplitPaneLeft, ctx),
@@ -511,7 +559,7 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::CloseOtherTabs, ctx),
         updateable_custom_item_without_checkmark(CustomAction::CloseTabsRight, ctx),
     ];
-    Menu::new("Tab", items)
+    Menu::new(if crate::swarm::SWARM_CHROME { "Session" } else { "Tab" }, items)
 }
 
 fn make_new_ai_menu(ctx: &AppContext) -> Menu {
@@ -926,6 +974,16 @@ fn feedback_menu_item() -> MenuItem {
 }
 
 fn make_new_help_menu() -> Menu {
+    if crate::swarm::SWARM_CHROME {
+        return Menu::new(
+            "Help",
+            vec![
+                link_menu_item("Swarm on GitHub…", crate::swarm::REPO_URL.into()),
+                link_menu_item("Design Notes…", format!("{}/blob/main/docs/DESIGN.md", crate::swarm::REPO_URL).into()),
+                link_menu_item("Report an Issue…", format!("{}/issues", crate::swarm::REPO_URL).into()),
+            ],
+        );
+    }
     Menu::new(
         "Help",
         vec![
@@ -1122,6 +1180,117 @@ fn open_new_window(ctx: &mut AppContext) {
 /// No-op updater function for custom menu items that never change.
 fn no_updates(_: &MenuItemProperties, _: &mut AppContext) -> MenuItemPropertyChanges {
     Default::default()
+}
+
+/// swarm-term: Swarm's app menu. Like Warp's, without the account, referral,
+/// resource center, changelog and privacy policy items.
+fn make_swarm_app_menu(ctx: &AppContext) -> Menu {
+    let mut menu_items = vec![
+        updateable_custom_item_without_checkmark(CustomAction::ShowAboutWarp, ctx),
+        MenuItem::Separator,
+        updateable_custom_item_without_checkmark(CustomAction::ShowSettings, ctx),
+        updateable_custom_item_without_checkmark(CustomAction::ConfigureKeybindings, ctx),
+        updateable_custom_item_without_checkmark(CustomAction::ShowAppearance, ctx),
+        MenuItem::Separator,
+    ];
+    #[cfg(target_os = "macos")]
+    menu_items.extend([MenuItem::Services, MenuItem::Separator]);
+    let debug_menu_items = debug_menu_items();
+    if !debug_menu_items.is_empty() {
+        menu_items.push(MenuItem::Custom(CustomMenuItem::new_with_submenu(
+            "Debug",
+            |_| (),
+            no_updates,
+            None,
+            debug_menu_items,
+        )));
+        menu_items.push(MenuItem::Separator);
+    }
+    menu_items.extend([
+        MenuItem::Standard(StandardAction::Hide),
+        MenuItem::Standard(StandardAction::HideOtherApps),
+        MenuItem::Standard(StandardAction::ShowAllApps),
+        MenuItem::Separator,
+        MenuItem::Custom(CustomMenuItem::new(
+            "Set Swarm as Default Terminal",
+            move |ctx| {
+                DefaultTerminal::handle(ctx).update(ctx, |default_terminal, ctx| {
+                    default_terminal.make_warp_default(ctx)
+                });
+            },
+            move |_props, ctx| {
+                let default_terminal = DefaultTerminal::handle(ctx).as_ref(ctx);
+                MenuItemPropertyChanges {
+                    disabled: Some(!DefaultTerminal::can_warp_become_default() || default_terminal.is_warp_default()),
+                    ..Default::default()
+                }
+            },
+            None,
+        )),
+        MenuItem::Separator,
+        MenuItem::Standard(StandardAction::Quit),
+    ]);
+    Menu::new(crate::swarm::APP_NAME, menu_items)
+}
+
+/// swarm-term: `item` titled `name`, whatever its updater would call it.
+fn swarm_relabel(item: MenuItem, name: &'static str) -> MenuItem {
+    match item {
+        MenuItem::Custom(mut c) => {
+            c.properties.name = name.to_string();
+            let updater = c.updater;
+            c.updater = Box::new(move |props, ctx| MenuItemPropertyChanges {
+                name: Some(name.to_string()),
+                ..updater(props, ctx)
+            });
+            MenuItem::Custom(c)
+        }
+        other => other,
+    }
+}
+
+/// swarm-term: a menu item running `action` in the active window's workspace.
+fn swarm_workspace_item(title: &str, action: WorkspaceAction) -> MenuItem {
+    MenuItem::Custom(CustomMenuItem::new(
+        title,
+        move |ctx| ctx.dispatch_global_action("root_view:workspace_action", &action),
+        |_props, ctx| MenuItemPropertyChanges {
+            disabled: Some(WindowManager::handle(ctx).as_ref(ctx).active_window().is_none()),
+            ..Default::default()
+        },
+        None,
+    ))
+}
+
+/// swarm-term: "New Session on" ▸ this Mac and each remembered host.
+fn swarm_new_session_on_host_menu() -> MenuItem {
+    MenuItem::Custom(CustomMenuItem::new_with_submenu(
+        "New Session on",
+        |_| (),
+        |_props, ctx| {
+            let has_window = WindowManager::handle(ctx).as_ref(ctx).active_window().is_some();
+            #[cfg(unix)]
+            let hosts = warp_terminal::local_tty::daemon::known_hosts();
+            #[cfg(not(unix))]
+            let hosts: Vec<String> = Vec::new();
+            let mut items = vec![swarm_workspace_item("This Mac", WorkspaceAction::SwarmNewSession { host: None })];
+            if !hosts.is_empty() {
+                items.push(MenuItem::Separator);
+            }
+            items.extend(
+                hosts
+                    .into_iter()
+                    .map(|h| swarm_workspace_item(&h.clone(), WorkspaceAction::SwarmNewSession { host: Some(h) })),
+            );
+            MenuItemPropertyChanges {
+                submenu: Some(Some(items)),
+                disabled: Some(!has_window),
+                ..Default::default()
+            }
+        },
+        None,
+        vec![],
+    ))
 }
 
 fn make_recent_repos_menu_items(ctx: &AppContext) -> Vec<MenuItem> {
