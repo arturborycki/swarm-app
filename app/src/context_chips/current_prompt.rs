@@ -230,10 +230,18 @@ impl CurrentPrompt {
             &SessionSettings::handle(ctx),
             Self::handle_session_settings_changed,
         );
-        ctx.subscribe_to_model(&sessions, |me, _, event, ctx| {
-            if let SessionsEvent::EnvironmentVariablesUpdated { .. } = event {
-                me.update_states_with_new_context(ctx);
+        ctx.subscribe_to_model(&sessions, |me, _, event, ctx| match event {
+            SessionsEvent::EnvironmentVariablesUpdated { .. } => me.update_states_with_new_context(ctx),
+            // The prompt may have been computed before its session finished
+            // bootstrapping (e.g. a reattached tab replaying its history), when
+            // the home dir, user and host weren't known yet.
+            SessionsEvent::SessionBootstrapped(bootstrapped)
+                if me.latest_context.as_ref().and_then(|c| c.active_block_metadata.session_id())
+                    == Some(bootstrapped.session_id) =>
+            {
+                me.update_states_with_new_context_and_session(ctx)
             }
+            _ => {}
         });
 
         if let Some((model_events, _)) = &live_session {

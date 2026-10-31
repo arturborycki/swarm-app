@@ -2743,7 +2743,8 @@ impl Workspace {
         ctx: &mut ViewContext<Self>,
     ) {
         #[cfg(unix)]
-        ctx.subscribe_to_model(&crate::swarm::sessions::SwarmSessions::handle(ctx), |_, _, _, ctx| {
+        ctx.subscribe_to_model(&crate::swarm::sessions::SwarmSessions::handle(ctx), |me, _, _, ctx| {
+            me.sync_swarm_tab_names(ctx);
             ctx.notify();
         });
         ctx.subscribe_to_model(&WarpConfig::handle(ctx), move |_me, _, event, ctx| {
@@ -6607,6 +6608,31 @@ impl Workspace {
             }
         }
     }
+
+    /// Shows sessions' daemon names (renamed elsewhere, e.g. `swarmctl rename`)
+    /// as their tabs' titles.
+    #[cfg(unix)]
+    fn sync_swarm_tab_names(&mut self, ctx: &mut ViewContext<Self>) {
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+        let mut renames = Vec::new();
+        for tab in &self.tabs {
+            let pane_group = tab.pane_group.as_ref(ctx);
+            let name = pane_group
+                .terminal_views(ctx)
+                .first()
+                .and_then(|view| view.as_ref(ctx).active_block_session_id())
+                .and_then(|id| sessions.name_for(id.as_u64()));
+            if let Some(name) = name.filter(|n| pane_group.custom_title(ctx).as_deref() != Some(n.as_str())) {
+                renames.push((tab.pane_group.clone(), name));
+            }
+        }
+        for (pane_group, name) in renames {
+            pane_group.update(ctx, |pane_group, ctx| pane_group.set_title_from_daemon(name, ctx));
+        }
+    }
+
+    #[cfg(not(unix))]
+    fn sync_swarm_tab_names(&mut self, _ctx: &mut ViewContext<Self>) {}
 
     /// Activates the tab showing `tab`'s session, if one does; returns whether it did.
     pub fn swarm_focus_session(&mut self, tab: &crate::swarm::ReattachTab, ctx: &mut ViewContext<Self>) -> bool {

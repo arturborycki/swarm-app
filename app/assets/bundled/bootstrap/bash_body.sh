@@ -523,6 +523,13 @@ if [ -z "$WARP_BOOTSTRAPPED" ]; then
       if [[ "$1" == warp_run_generator_command* ]]; then
         return
       fi
+      # $1 comes from history, which leaves out Warp's in-band commands (they
+      # are space-prefixed or in HISTIGNORE): for those, $1 is the previous
+      # history entry and the title would show a stale command. Check what is
+      # actually running instead.
+      if [[ "$BASH_COMMAND" == warp_* || "$BASH_COMMAND" == _warp_* ]]; then
+        return
+      fi
 
       cmd="$1"
       # warp_set_title_active_on_preexec is a preexec_function, which accepts 1 argument 

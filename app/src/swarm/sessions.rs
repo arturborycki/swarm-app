@@ -96,6 +96,16 @@ impl SwarmSessions {
         }
     }
 
+    /// The daemon's name for the session behind a terminal, by Warp session id.
+    pub fn name_for(&self, warp_session_id: u64) -> Option<String> {
+        self.by_host
+            .values()
+            .flatten()
+            .find(|s| s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id))?
+            .name
+            .clone()
+    }
+
     /// `host`'s sessions as last seen (`None`: the local daemon).
     pub fn sessions_on(&self, host: Option<&str>) -> &[DaemonSession] {
         self.by_host.get(&host.map(str::to_string)).map(Vec::as_slice).unwrap_or(&[])

@@ -2177,8 +2177,14 @@ fn render_tab_group_internal(
     // an override here would shadow every pane's title with the same string.
     // In Tabs/Summary modes there is only one row per tab, so the tab-level
     // custom title is still the right thing to show.
+    // swarm-term: a single-pane tab in a group is one session; its name (the
+    // tab's custom title) is the row's title, as outside groups.
+    let single_pane_session = crate::swarm::SWARM_CHROME && visible_pane_ids.len() == 1;
     let displayed_tab_title_override =
-        if in_tab_group && matches!(display_granularity, VerticalTabsDisplayGranularity::Panes) {
+        if in_tab_group
+            && matches!(display_granularity, VerticalTabsDisplayGranularity::Panes)
+            && !single_pane_session
+        {
             None
         } else {
             (!uses_outer_group_container)

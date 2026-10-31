@@ -5277,6 +5277,15 @@ impl PaneGroup {
         }
     }
 
+    /// swarm-term: the session was renamed in the daemon (e.g. `swarmctl
+    /// rename`); show it without writing it back.
+    pub fn set_title_from_daemon(&mut self, title: String, ctx: &mut ViewContext<Self>) {
+        if self.custom_title.as_deref() != Some(title.as_str()) {
+            self.custom_title = Some(title);
+            ctx.notify();
+        }
+    }
+
     pub fn clear_title(&mut self, ctx: &mut ViewContext<Self>) {
         self.custom_title = None;
         self.name_daemon_sessions(None, ctx);
