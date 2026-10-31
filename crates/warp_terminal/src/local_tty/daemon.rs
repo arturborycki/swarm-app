@@ -465,16 +465,31 @@ async fn run_bridge(
     let id = att.info.id.clone();
     let mut last_offset = att.replay_from;
     let mut guard_until: Option<Instant> = None;
+    let mut eol_marks = swarm_client::EolMarkFilter::default();
     let mut buf = vec![0u8; 64 * 1024];
 
     loop {
         tokio::select! {
             ev = att.recv() => match ev {
                 Some(StreamEvent::Output { offset, data, replay }) => {
-                    if wr.write_all(&data).await.is_err() {
+                    let end = offset + data.len() as u64;
+                    // Replayed output may go to a narrower screen than it was
+                    // written for; zsh's partial-line marks would show there.
+                    let out = if replay {
+                        let mut out = eol_marks.push(&data);
+                        if end >= att.live_from {
+                            out.extend(eol_marks.finish());
+                        }
+                        out
+                    } else {
+                        let mut out = eol_marks.finish();
+                        out.extend_from_slice(&data);
+                        out
+                    };
+                    if wr.write_all(&out).await.is_err() {
                         break;
                     }
-                    last_offset = offset + data.len() as u64;
+                    last_offset = end;
                     if replay && guard_replay {
                         guard_until = Some(Instant::now() + REPLAY_RESPONSE_GUARD);
                     }
@@ -503,6 +518,11 @@ async fn run_bridge(
                 }
                 Some(StreamEvent::Closed { reason }) => {
                     log::info!("swarm: session {id} stream closed: {reason}");
+                    // Resuming starts after what was received, held back or not.
+                    let held = eol_marks.finish();
+                    if !held.is_empty() && wr.write_all(&held).await.is_err() {
+                        break;
+                    }
                     // A dropped connection (sleep, network change, ssh died)
                     // resumes exactly where it stopped; a removed session doesn't.
                     match reconnect(daemons, host.as_deref(), &id, last_offset, &mut ctl).await {
