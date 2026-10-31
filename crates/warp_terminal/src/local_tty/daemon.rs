@@ -507,6 +507,7 @@ async fn run_bridge(
     let mut guard_until: Option<Instant> = None;
     let mut eol_marks = swarm_client::EolMarkFilter::default();
     let mut buf = vec![0u8; 64 * 1024];
+    quiet_output(&id, ATTACH_GRACE);
 
     loop {
         tokio::select! {
@@ -530,6 +531,9 @@ async fn run_bridge(
                         break;
                     }
                     last_offset = end;
+                    if !replay && !data.is_empty() {
+                        note_output(&id);
+                    }
                     if replay && guard_replay {
                         guard_until = Some(Instant::now() + REPLAY_RESPONSE_GUARD);
                     }
@@ -589,6 +593,7 @@ async fn run_bridge(
             },
             c = ctl.recv() => match c {
                 Some(Ctl::Resize(size)) => {
+                    quiet_output(&id, SEEN_GRACE);
                     let _ = att.resize(size).await;
                 }
                 Some(Ctl::Detach) => break,
@@ -598,6 +603,7 @@ async fn run_bridge(
     }
     // Dropping the attachment detaches; the session keeps running.
     drop(att);
+    forget_output(&id);
 }
 
 /// Re-attaches to `id` on `host` from `offset`, retrying with backoff for a
@@ -643,6 +649,65 @@ fn set_reconnecting(id: &str, on: bool) {
     if changed && let Some(listener) = LINK_LISTENER.get() {
         listener();
     }
+}
+
+/// Output nobody has looked at yet: daemon session ids that printed something
+/// while their tab was in the background.
+static UNSEEN: LazyLock<Mutex<UnseenOutput>> = LazyLock::new(Default::default);
+static UNSEEN_LISTENER: std::sync::OnceLock<Box<dyn Fn(String) + Send + Sync>> = std::sync::OnceLock::new();
+/// Output this soon after a tab is shown, hidden or resized is the shell
+/// redrawing, not news.
+const SEEN_GRACE: Duration = Duration::from_secs(1);
+/// Output this soon after attaching is Warp setting up the shell.
+const ATTACH_GRACE: Duration = Duration::from_secs(5);
+
+#[derive(Default)]
+struct UnseenOutput {
+    sessions: std::collections::HashSet<String>,
+    quiet_until: HashMap<String, Instant>,
+}
+
+/// Calls `f(session id)` (on a daemon thread) when a session prints output
+/// it hadn't yet since it was last marked seen.
+pub fn on_unseen_output(f: impl Fn(String) + Send + Sync + 'static) {
+    let _ = UNSEEN_LISTENER.set(Box::new(f));
+}
+
+/// Whether daemon session `id` printed output since it was last marked seen.
+pub fn has_unseen_output(id: &str) -> bool {
+    UNSEEN.lock().unwrap().sessions.contains(id)
+}
+
+/// The user has seen daemon session `id`'s output (its tab is showing, or was
+/// until now); output in the next moment doesn't count as new either.
+pub fn mark_output_seen(id: &str) {
+    let mut unseen = UNSEEN.lock().unwrap();
+    unseen.sessions.remove(id);
+    unseen.quiet_until.insert(id.to_string(), Instant::now() + SEEN_GRACE);
+}
+
+fn quiet_output(id: &str, grace: Duration) {
+    let until = Instant::now() + grace;
+    let mut unseen = UNSEEN.lock().unwrap();
+    let entry = unseen.quiet_until.entry(id.to_string()).or_insert(until);
+    *entry = (*entry).max(until);
+}
+
+fn note_output(id: &str) {
+    let newly_unseen = {
+        let mut unseen = UNSEEN.lock().unwrap();
+        let quiet = unseen.quiet_until.get(id).is_some_and(|t| Instant::now() < *t);
+        !quiet && unseen.sessions.insert(id.to_string())
+    };
+    if newly_unseen && let Some(listener) = UNSEEN_LISTENER.get() {
+        listener(id.to_string());
+    }
+}
+
+fn forget_output(id: &str) {
+    let mut unseen = UNSEEN.lock().unwrap();
+    unseen.sessions.remove(id);
+    unseen.quiet_until.remove(id);
 }
 
 async fn reconnect(

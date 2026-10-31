@@ -35,3 +35,26 @@ fn uname_maps_to_swarmd_platform_names() {
     assert_eq!(platform_from_uname("FreeBSD amd64"), "freebsd-x86_64");
     assert_eq!(local_platform(), format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
 }
+
+#[test]
+fn background_output_is_unseen_until_marked_seen() {
+    let id = "unseen-test";
+    note_output(id);
+    assert!(has_unseen_output(id), "output with no tab showing it is news");
+
+    mark_output_seen(id);
+    assert!(!has_unseen_output(id));
+    note_output(id);
+    assert!(!has_unseen_output(id), "output right after the tab was shown is a redraw");
+
+    forget_output(id);
+    quiet_output(id, ATTACH_GRACE);
+    note_output(id);
+    assert!(!has_unseen_output(id), "output while attaching is Warp's setup");
+
+    forget_output(id);
+    note_output(id);
+    assert!(has_unseen_output(id));
+    forget_output(id);
+    assert!(!has_unseen_output(id));
+}

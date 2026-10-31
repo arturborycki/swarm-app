@@ -2751,6 +2751,10 @@ impl Workspace {
     ) {
         #[cfg(unix)]
         ctx.subscribe_to_model(&crate::swarm::sessions::SwarmSessions::handle(ctx), |me, _, event, ctx| {
+            if let crate::swarm::sessions::SwarmSessionsEvent::Output { daemon_id, warp_session_id } = event {
+                me.on_swarm_output(daemon_id, *warp_session_id, ctx);
+                return;
+            }
             if let crate::swarm::sessions::SwarmSessionsEvent::Attention { title, body } = event {
                 me.notify_swarm_attention(title.clone(), body.clone(), ctx);
             }
@@ -5659,6 +5663,13 @@ impl Workspace {
             index
         };
 
+        // swarm-term: the tab being left was seen up to now, and the one
+        // being shown is about to be.
+        #[cfg(unix)]
+        {
+            self.mark_swarm_tab_seen(self.active_tab_index, ctx);
+            self.mark_swarm_tab_seen(index, ctx);
+        }
         self.active_tab_index = index;
 
         // The range selection's anchor is the active tab, so any change to
@@ -6574,6 +6585,38 @@ impl Workspace {
 
     #[cfg(not(unix))]
     fn sync_swarm_tab_names(&mut self, _ctx: &mut ViewContext<Self>) {}
+
+    /// A session printed output nobody has seen: if this window is showing
+    /// it, it has been seen; if it's one of this window's background tabs,
+    /// its title goes bold.
+    #[cfg(unix)]
+    fn on_swarm_output(&mut self, daemon_id: &str, warp_session_id: u64, ctx: &mut ViewContext<Self>) {
+        let holds = |pane_group: &PaneGroup| {
+            pane_group
+                .terminal_views(ctx)
+                .iter()
+                .any(|view| view.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) == Some(warp_session_id))
+        };
+        if holds(self.active_tab_pane_group().as_ref(ctx)) {
+            warp_terminal::local_tty::daemon::mark_output_seen(daemon_id);
+        } else if self.tabs.iter().any(|tab| holds(tab.pane_group.as_ref(ctx))) {
+            ctx.notify();
+        }
+    }
+
+    /// Marks the output of the sessions in tab `index` as seen.
+    #[cfg(unix)]
+    fn mark_swarm_tab_seen(&self, index: usize, ctx: &AppContext) {
+        let Some(tab) = self.tabs.get(index) else {
+            return;
+        };
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+        for view in tab.pane_group.as_ref(ctx).terminal_views(ctx) {
+            if let Some(id) = view.as_ref(ctx).active_block_session_id().and_then(|id| sessions.daemon_id_for(id.as_u64())) {
+                warp_terminal::local_tty::daemon::mark_output_seen(&id);
+            }
+        }
+    }
 
     /// The active tab for VoiceOver: "build, tab 2 of 5, This Mac, running cargo".
     fn spoken_active_tab(&self, ctx: &AppContext) -> String {

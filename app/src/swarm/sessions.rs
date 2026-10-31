@@ -72,6 +72,8 @@ pub struct SessionStatus {
     pub size: (u16, u16),
     /// The other clients attached to it ("Swarm on mini-2", "swarmctl").
     pub others: Vec<String>,
+    /// It printed something since its tab was last shown.
+    pub unseen: bool,
 }
 
 impl SessionStatus {
@@ -98,6 +100,9 @@ pub enum SwarmSessionsEvent {
     Changed,
     /// Something needs the user's attention: (title, body) for a notification.
     Attention { title: String, body: String },
+    /// A session printed output nobody has seen yet: the window showing it
+    /// marks it seen, others show its tab as having news.
+    Output { daemon_id: String, warp_session_id: u64 },
 }
 
 impl SwarmSessions {
@@ -116,6 +121,12 @@ impl SwarmSessions {
             let _ = lost_tx.try_send((host, id));
         });
         let _ = ctx.spawn_stream_local(lost_rx, Self::on_link_lost, |_, _| {});
+        // Sessions printing while their tab is in the background.
+        let (output_tx, output_rx) = async_channel::unbounded::<String>();
+        daemon::on_unseen_output(move |id| {
+            let _ = output_tx.try_send(id);
+        });
+        let _ = ctx.spawn_stream_local(output_rx, Self::on_unseen_output, |_, _| {});
         let me = SwarmSessions {
             by_host: BTreeMap::new(),
             attention: BTreeMap::new(),
@@ -278,7 +289,29 @@ impl SwarmSessions {
             cwd,
             size: (session.size.cols, session.size.rows),
             others,
+            unseen: daemon::has_unseen_output(&session.id),
         })
+    }
+
+    /// The daemon's id for the session behind a terminal, by Warp session id.
+    pub fn daemon_id_for(&self, warp_session_id: u64) -> Option<String> {
+        self.by_host
+            .values()
+            .flatten()
+            .find(|s| s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id))
+            .map(|s| s.id.clone())
+    }
+
+    fn on_unseen_output(&mut self, daemon_id: String, ctx: &mut ModelContext<Self>) {
+        let warp_session_id = self
+            .by_host
+            .values()
+            .flatten()
+            .find(|s| s.id == daemon_id)
+            .and_then(|s| s.ui.get(daemon::META_SESSION_ID)?.parse::<u64>().ok());
+        if let Some(warp_session_id) = warp_session_id {
+            ctx.emit(SwarmSessionsEvent::Output { daemon_id, warp_session_id });
+        }
     }
 
     /// The daemon's name for the session behind a terminal, by Warp session id.

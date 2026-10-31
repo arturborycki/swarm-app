@@ -3544,6 +3544,17 @@ fn swarm_session_status(terminal_view: &TerminalView, app: &AppContext) -> Optio
     crate::swarm::sessions::SwarmSessions::as_ref(app).status_for(id.as_u64())
 }
 
+/// Whether the pane's daemon session printed output since its tab was last shown.
+fn has_unseen_swarm_output(typed: &TypedPane<'_>, app: &AppContext) -> bool {
+    #[cfg(unix)]
+    if let TypedPane::Terminal(terminal_pane) = typed {
+        return swarm_session_status(terminal_pane.terminal_view(app).as_ref(app), app)
+            .is_some_and(|status| status.unseen);
+    }
+    let _ = (typed, app);
+    false
+}
+
 /// A daemon session's state as the row's icon: a shape per state (● idle,
 /// ◐ running, ! needs attention, ○ exited, ⟳ reconnecting), each in its own color.
 fn swarm_session_icon(terminal_view: &TerminalView, theme: &WarpTheme, app: &AppContext) -> Option<IconWithStatusVariant> {
@@ -3735,9 +3746,10 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
                 1.,
                 render_pane_title_slot(
                     &props,
-                    || {
+                    |style| {
                         Text::new_inline(props.displayed_title().to_string(), font_family, 12.)
                             .with_clip(ClipConfig::ellipsis())
+                            .with_style(style)
                             .with_color(theme.main_text_color(theme.background()).into())
                             .finish()
                     },
@@ -4740,11 +4752,12 @@ fn render_terminal_row_content(
         VerticalTabsPrimaryInfo::Command => (
             render_pane_title_slot(
                 props,
-                || {
+                |style| {
                     render_terminal_primary_line_for_view(
                         terminal_view,
                         appearance,
                         main_text_color,
+                        style,
                         app,
                     )
                 },
@@ -4758,6 +4771,7 @@ fn render_terminal_row_content(
                 &working_directory,
                 sub_text_color,
                 ClipConfig::start(),
+                Properties::default(),
                 appearance,
             ),
             MetadataLeftContent::GitBranch(git_branch),
@@ -4765,11 +4779,12 @@ fn render_terminal_row_content(
         VerticalTabsPrimaryInfo::WorkingDirectory => (
             render_pane_title_slot(
                 props,
-                || {
+                |style| {
                     render_text_line(
                         &working_directory,
                         main_text_color,
                         ClipConfig::start(),
+                        style,
                         appearance,
                     )
                 },
@@ -4779,7 +4794,7 @@ fn render_terminal_row_content(
                 appearance,
                 app,
             ),
-            render_terminal_primary_line_for_view(terminal_view, appearance, sub_text_color, app),
+            render_terminal_primary_line_for_view(terminal_view, appearance, sub_text_color, Properties::default(), app),
             MetadataLeftContent::GitBranch(git_branch),
         ),
         VerticalTabsPrimaryInfo::Branch => {
@@ -4788,14 +4803,15 @@ fn render_terminal_row_content(
             (
                 render_pane_title_slot(
                     props,
-                    || {
+                    |style| {
                         if show_branch_icon {
-                            render_git_branch_text(&branch_text, main_text_color, 12., appearance)
+                            render_git_branch_text(&branch_text, main_text_color, 12., style, appearance)
                         } else {
                             render_text_line(
                                 &branch_text,
                                 main_text_color,
                                 ClipConfig::start(),
+                                style,
                                 appearance,
                             )
                         }
@@ -4810,6 +4826,7 @@ fn render_terminal_row_content(
                     terminal_view,
                     appearance,
                     sub_text_color,
+                    Properties::default(),
                     app,
                 ),
                 MetadataLeftContent::WorkingDirectory(working_directory),
@@ -4886,6 +4903,7 @@ fn render_git_branch_text(
     branch: &str,
     text_color: WarpThemeFill,
     font_size: f32,
+    style: Properties,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     Flex::row()
@@ -4902,6 +4920,7 @@ fn render_git_branch_text(
                 1.,
                 Text::new_inline(branch.to_string(), appearance.ui_font_family(), font_size)
                     .with_clip(ClipConfig::ellipsis())
+                    .with_style(style)
                     .with_color(text_color.into())
                     .finish(),
             )
@@ -4919,10 +4938,12 @@ fn render_text_line(
     text: &str,
     text_color: WarpThemeFill,
     clip: ClipConfig,
+    style: Properties,
     appearance: &Appearance,
 ) -> Box<dyn Element> {
     Text::new_inline(text.to_string(), appearance.ui_font_family(), 12.)
         .with_clip(clip)
+        .with_style(style)
         .with_color(text_color.into())
         .finish()
 }
@@ -4952,6 +4973,7 @@ fn render_title_override(
     font_size: f32,
     text_color: WarpThemeFill,
     clip: ClipConfig,
+    style: Properties,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Option<Box<dyn Element>> {
@@ -4975,22 +4997,31 @@ fn render_title_override(
         .map(|title| {
             Text::new_inline(title.clone(), appearance.ui_font_family(), font_size)
                 .with_clip(clip)
+                .with_style(style)
                 .with_color(text_color.into())
                 .finish()
         })
 }
 
+/// Renders a pane row's title: the override if there is one, else
+/// `generated_title(style)`. swarm-term: bold for a background tab whose
+/// session printed something since it was last shown.
 fn render_pane_title_slot(
     props: &PaneProps<'_>,
-    generated_title: impl FnOnce() -> Box<dyn Element>,
+    generated_title: impl FnOnce(Properties) -> Box<dyn Element>,
     font_size: f32,
     text_color: WarpThemeFill,
     clip: ClipConfig,
     appearance: &Appearance,
     app: &AppContext,
 ) -> Box<dyn Element> {
-    let title = render_title_override(props, font_size, text_color, clip, appearance, app)
-        .unwrap_or_else(generated_title);
+    let style = if !props.is_active_tab && has_unseen_swarm_output(&props.typed, app) {
+        Properties::default().weight(Weight::Bold)
+    } else {
+        Properties::default()
+    };
+    let title = render_title_override(props, font_size, text_color, clip, style, appearance, app)
+        .unwrap_or_else(|| generated_title(style));
 
     if !matches!(
         props.display_granularity,
@@ -5057,6 +5088,7 @@ fn render_summary_tab_item(
         12.,
         main_text_color,
         ClipConfig::end(),
+        Properties::default(),
         appearance,
         app,
     ) {
@@ -5069,6 +5101,7 @@ fn render_summary_tab_item(
                     &props.title,
                     main_text_color,
                     ClipConfig::end(),
+                    Properties::default(),
                     appearance,
                 ));
             } else {
@@ -5142,6 +5175,7 @@ fn render_summary_tab_item(
                 working_dir,
                 sub_text_color,
                 ClipConfig::start(),
+                Properties::default(),
                 appearance,
             ))
             .with_margin_top(margin)
@@ -5225,7 +5259,7 @@ fn render_summary_primary_label_line(
     // the pill from `render_status_element`.
     const STATUS_ELEMENT_PADDING: f32 = 2.;
     let prefix_slot_size = VERTICAL_TABS_SUMMARY_STATUS_ICON_SIZE + STATUS_ELEMENT_PADDING * 2.;
-    let text = render_text_line(&label.text, text_color, ClipConfig::end(), appearance);
+    let text = render_text_line(&label.text, text_color, ClipConfig::end(), Properties::default(), appearance);
 
     let prefix: Option<Box<dyn Element>> = match (label.status.as_ref(), reserve_prefix_slot) {
         (Some(status), _) => Some(render_status_element(
@@ -5509,7 +5543,7 @@ fn render_summary_branch_line(
         .with_child(
             Shrinkable::new(
                 1.,
-                render_git_branch_text(&entry.branch_name, sub_text_color, 10., appearance),
+                render_git_branch_text(&entry.branch_name, sub_text_color, 10., Properties::default(), appearance),
             )
             .finish(),
         );
@@ -5569,6 +5603,7 @@ fn render_terminal_primary_line_for_view(
     terminal_view: &TerminalView,
     appearance: &Appearance,
     text_color: WarpThemeFill,
+    style: Properties,
     app: &AppContext,
 ) -> Box<dyn Element> {
     let title_text = terminal_view.terminal_title_from_shell();
@@ -5591,6 +5626,7 @@ fn render_terminal_primary_line_for_view(
         terminal_view,
         appearance,
         text_color,
+        style,
     )
 }
 
@@ -5603,6 +5639,7 @@ fn render_terminal_primary_line(
     terminal_view: &TerminalView,
     appearance: &Appearance,
     text_color: WarpThemeFill,
+    style: Properties,
 ) -> Box<dyn Element> {
     let theme = appearance.theme();
 
@@ -5634,6 +5671,7 @@ fn render_terminal_primary_line(
         TerminalPrimaryLineData::StatusText { text, .. } => {
             Text::new_inline(text, appearance.ui_font_family(), 12.)
                 .with_clip(ClipConfig::ellipsis())
+                .with_style(style)
                 .with_color(text_color.into())
                 .finish()
         }
@@ -5644,6 +5682,7 @@ fn render_terminal_primary_line(
             };
             let title_el = Text::new_inline(text, font_family, 12.)
                 .with_clip(ClipConfig::ellipsis())
+                .with_style(style)
                 .with_color(text_color.into())
                 .finish();
             wrap_with_error_indicator(title_el)
@@ -5675,7 +5714,7 @@ fn render_terminal_metadata_line(
         MetadataLeftContent::GitBranch(Some(branch)) if !branch.trim().is_empty() => {
             Shrinkable::new(
                 1.,
-                render_git_branch_text(&branch, sub_text_color, 10., appearance),
+                render_git_branch_text(&branch, sub_text_color, 10., Properties::default(), appearance),
             )
             .finish()
         }
@@ -7161,6 +7200,7 @@ fn render_terminal_detail_section(
             &branch,
             text_colors.main,
             12.,
+            Properties::default(),
             appearance,
         ));
     }
@@ -7587,25 +7627,28 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
             // Title based on "Pane title as"
             let title: Box<dyn Element> = render_pane_title_slot(
                 &props,
-                || match primary_info {
+                |style| match primary_info {
                     VerticalTabsPrimaryInfo::Command => render_terminal_primary_line_for_view(
                         terminal_view,
                         appearance,
                         main_text_color,
+                        style,
                         app,
                     ),
                     VerticalTabsPrimaryInfo::WorkingDirectory => {
                         Text::new_inline(working_directory_text.clone(), font_family, 12.)
                             .with_clip(ClipConfig::start())
+                            .with_style(style)
                             .with_color(main_text_color.into())
                             .finish()
                     }
                     VerticalTabsPrimaryInfo::Branch => match branch_display {
                         (branch_text, true) => {
-                            render_git_branch_text(&branch_text, main_text_color, 12., appearance)
+                            render_git_branch_text(&branch_text, main_text_color, 12., style, appearance)
                         }
                         (fallback_text, false) => Text::new_inline(fallback_text, font_family, 12.)
                             .with_clip(ClipConfig::start())
+                            .with_style(style)
                             .with_color(main_text_color.into())
                             .finish(),
                     },
@@ -7625,7 +7668,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
                 )
                 .map(|(text, show_branch_icon)| {
                     if show_branch_icon {
-                        render_git_branch_text(&text, sub_text_color, 10., appearance)
+                        render_git_branch_text(&text, sub_text_color, 10., Properties::default(), appearance)
                     } else {
                         Text::new_inline(text, font_family, 10.)
                             .with_clip(ClipConfig::start())
@@ -7665,7 +7708,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         } else {
             let title = render_pane_title_slot(
                 &props,
-                || {
+                |_| {
                     render_compact_non_terminal_title(
                         props.displayed_title(),
                         &props.typed,

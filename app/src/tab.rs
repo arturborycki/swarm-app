@@ -1103,6 +1103,8 @@ pub struct TabComponent<'a> {
     /// (multi-tab menu vs single-tab menu).
     is_in_multi_tab_selection: bool,
     shortcut_hint_label: Option<String>,
+    /// swarm-term: a session in the tab printed output since it was last shown.
+    has_unseen_output: bool,
 }
 
 /// Structure that holds TabComponent styles.
@@ -1285,6 +1287,7 @@ impl<'a> TabComponent<'a> {
             can_tear_off: !crate::swarm::pane_group_is_remote(tab.pane_group.as_ref(ctx), ctx),
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
+            has_unseen_output: Self::has_unseen_swarm_output(tab, ctx),
         }
     }
 
@@ -1324,6 +1327,23 @@ impl<'a> TabComponent<'a> {
     /// or `None` if there is no non-empty, non-passive conversation to display.
     /// When a shell command is long-running the status is overridden to
     /// `InProgress`, matching vertical-tab behavior.
+    /// Whether a daemon session in the tab printed output since it was last shown.
+    #[cfg(unix)]
+    fn has_unseen_swarm_output(tab: &TabData, app: &AppContext) -> bool {
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(app);
+        tab.pane_group.as_ref(app).terminal_views(app).iter().any(|view| {
+            view.as_ref(app)
+                .active_block_session_id()
+                .and_then(|id| sessions.status_for(id.as_u64()))
+                .is_some_and(|status| status.unseen)
+        })
+    }
+
+    #[cfg(not(unix))]
+    fn has_unseen_swarm_output(_tab: &TabData, _app: &AppContext) -> bool {
+        false
+    }
+
     /// The state of the daemon session in the tab's focused terminal.
     fn swarm_session_mark(tab: &TabData, app: &AppContext) -> Option<crate::swarm::sessions::SessionMark> {
         #[cfg(unix)]
@@ -1507,7 +1527,10 @@ impl<'a> TabComponent<'a> {
         } else {
             self.styles.default
         };
-        let font_style = styles.font_properties();
+        let mut font_style = styles.font_properties();
+        if self.has_unseen_output && !self.is_active_tab() {
+            font_style = font_style.weight(Weight::Bold);
+        }
         let font_color = styles.font_color.expect("Font color is set");
 
         if self.is_tab_being_renamed() {
