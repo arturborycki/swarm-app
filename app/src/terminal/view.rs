@@ -12811,7 +12811,21 @@ impl TerminalView {
                     .is_some_and(|workspace| {
                         workspace.as_ref(ctx).is_inline_rename_editor_focused(ctx)
                     });
-                if !inline_rename_editor_is_focused {
+                // swarm-term: tabs reattached at launch all replay at once; only
+                // the one in view may take focus.
+                let my_id = ctx.view_id();
+                let in_background_tab = WorkspaceRegistry::as_ref(ctx)
+                    .get(self.window_id, ctx)
+                    .is_some_and(|workspace| {
+                        !workspace
+                            .as_ref(ctx)
+                            .active_tab_pane_group()
+                            .as_ref(ctx)
+                            .terminal_views(ctx)
+                            .iter()
+                            .any(|view| view.id() == my_id)
+                    });
+                if !inline_rename_editor_is_focused && !in_background_tab {
                     self.focus_terminal(ctx);
                 }
             }

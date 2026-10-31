@@ -3422,6 +3422,47 @@ fn has_unread_activity_for_terminal_view(terminal_view_id: EntityId, app: &AppCo
 
 const INDICATOR_DOT_SIZE: f32 = 8.;
 
+/// swarm-term: `trailing` preceded by a dot for the daemon session's state:
+/// green while a command runs, gray once it has exited, blue when another
+/// client is attached too. Idle shells get no dot.
+fn with_swarm_session_mark(
+    terminal_view: &TerminalView,
+    trailing: Option<Box<dyn Element>>,
+    theme: &WarpTheme,
+    app: &AppContext,
+) -> Option<Box<dyn Element>> {
+    #[cfg(unix)]
+    {
+        use crate::swarm::sessions::{SessionMark, SwarmSessions};
+        let mark = terminal_view
+            .active_block_session_id()
+            .and_then(|id| SwarmSessions::as_ref(app).mark_for(id.as_u64()));
+        if let Some(mark) = mark {
+            let color: WarpThemeFill = match mark {
+                SessionMark::Busy => theme.terminal_colors().normal.green.into(),
+                SessionMark::Exited => theme.disabled_ui_text_color().into(),
+                SessionMark::AttachedElsewhere => theme.terminal_colors().normal.blue.into(),
+            };
+            let dot = ConstrainedBox::new(WarpIcon::CircleFilled.to_warpui_icon(color).finish())
+                .with_width(INDICATOR_DOT_SIZE)
+                .with_height(INDICATOR_DOT_SIZE)
+                .finish();
+            let mut row = Flex::row()
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(4.)
+                .with_child(dot);
+            if let Some(trailing) = trailing {
+                row.add_child(trailing);
+            }
+            return Some(row.finish());
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (terminal_view, theme, app);
+    trailing
+}
+
 fn render_title_indicator(theme: &WarpTheme) -> Box<dyn Element> {
     ConstrainedBox::new(
         WarpIcon::CircleFilled
@@ -4651,7 +4692,12 @@ fn render_terminal_row_content(
         first_line,
         row_shows_synced_inputs_indicator(props, app),
         has_unread_activity(&props.typed, app),
-        shortcut_hint_label(props, app).map(|label| render_shortcut_hint(&label, appearance)),
+        with_swarm_session_mark(
+            terminal_view,
+            shortcut_hint_label(props, app).map(|label| render_shortcut_hint(&label, appearance)),
+            theme,
+            app,
+        ),
         theme,
     );
 
@@ -7526,11 +7572,18 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         };
 
     // Title row with optional indicators
+    let hint = shortcut_hint_label(&props, app).map(|label| render_shortcut_hint(&label, appearance));
+    let hint = match &props.typed {
+        TypedPane::Terminal(terminal_pane) => {
+            with_swarm_session_mark(terminal_pane.terminal_view(app).as_ref(app), hint, theme, app)
+        }
+        _ => hint,
+    };
     let title_row = render_row_title_line(
         title_element,
         row_shows_synced_inputs_indicator(&props, app),
         has_indicator,
-        shortcut_hint_label(&props, app).map(|label| render_shortcut_hint(&label, appearance)),
+        hint,
         theme,
     );
 

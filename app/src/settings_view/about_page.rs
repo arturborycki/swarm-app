@@ -54,7 +54,7 @@ impl SettingsWidget for AboutPageWidget {
     type View = AboutPageView;
 
     fn search_terms(&self) -> &str {
-        "about warp version"
+        "about swarm version"
     }
 
     fn render(
@@ -66,13 +66,20 @@ impl SettingsWidget for AboutPageWidget {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
 
-        let image_path = if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
+        // swarm-term: Swarm's icon with its name instead of Warp's logo.
+        let image_path = if crate::swarm::SWARM_CHROME {
+            "bundled/png/swarm-icon.png"
+        } else if theme.inferred_color_scheme() == ColorScheme::LightOnDark {
             "bundled/svg/warp-logo-with-light-title.svg"
         } else {
             "bundled/svg/warp-logo-with-dark-title.svg"
         };
 
-        let version = ChannelState::app_version().unwrap_or("v#.##.###");
+        let version = ChannelState::app_version().unwrap_or(if crate::swarm::SWARM_CHROME {
+            concat!("v", env!("CARGO_PKG_VERSION"))
+        } else {
+            "v#.##.###"
+        });
 
         let version_text = ui_builder
             .span(version.to_string())
@@ -115,6 +122,17 @@ impl SettingsWidget for AboutPageWidget {
                     .with_max_width(350.)
                     .finish(),
                 )
+                .with_children(crate::swarm::SWARM_CHROME.then(|| {
+                    ui_builder
+                        .span(crate::swarm::APP_NAME.to_string())
+                        .with_style(warpui::ui_components::components::UiComponentStyles {
+                            font_size: Some(28.),
+                            ..Default::default()
+                        })
+                        .build()
+                        .with_margin_top(12.)
+                        .finish()
+                }))
                 .with_child(version_row.finish())
                 .with_child(
                     ui_builder

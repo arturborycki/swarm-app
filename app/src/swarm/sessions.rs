@@ -14,6 +14,17 @@ pub struct SwarmSessions {
     tx: async_channel::Sender<(Host, Vec<DaemonSession>)>,
 }
 
+/// A session's state as the sidebar shows it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionMark {
+    /// A command is running in the foreground.
+    Busy,
+    /// The session's process has ended.
+    Exited,
+    /// Another client (another window, `swarmctl attach`) is attached too.
+    AttachedElsewhere,
+}
+
 pub enum SwarmSessionsEvent {
     Changed,
 }
@@ -56,6 +67,23 @@ impl SwarmSessions {
     /// Running local sessions no client is attached to, oldest first.
     pub fn detached(&self) -> impl Iterator<Item = &DaemonSession> {
         self.sessions_on(None).iter().filter(|s| s.is_running() && s.clients.is_empty())
+    }
+
+    /// What the sidebar marks the session behind a terminal with, by its Warp
+    /// session id; `None` for an idle shell or a session this app doesn't follow.
+    pub fn mark_for(&self, warp_session_id: u64) -> Option<SessionMark> {
+        let session = self.by_host.values().flatten().find(|s| {
+            s.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok()) == Some(warp_session_id)
+        })?;
+        if !session.is_running() {
+            Some(SessionMark::Exited)
+        } else if session.clients.len() > 1 {
+            Some(SessionMark::AttachedElsewhere)
+        } else if session.foreground.is_some() {
+            Some(SessionMark::Busy)
+        } else {
+            None
+        }
     }
 
     /// `host`'s sessions as last seen (`None`: the local daemon).

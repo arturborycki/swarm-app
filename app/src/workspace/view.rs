@@ -6526,13 +6526,25 @@ impl Workspace {
             .and_then(|key| self.tab_groups.values().find(|g| crate::swarm::group_key(g) == *key))
             .map(|g| g.id);
         // A new tab joins the active tab's group; the session's own group wins.
+        // Membership is changed directly: the group actions also move focus,
+        // which would leave it in whichever tab was added last.
         let index = self.active_tab_index;
-        if self.tabs[index].group_id.is_some() && self.tabs[index].group_id != target {
-            self.remove_tab_from_group(index, ctx);
+        if let Some(previous) = self.tabs[index].group_id.filter(|g| Some(*g) != target) {
+            let after = self.index_after_group(previous).map(|t| self.clamp_to_unpinned_region(&self.tabs, t));
+            self.tabs[index].group_id = None;
+            if let Some(after) = after {
+                self.move_tab_to_index(index, after, ctx);
+            }
+            self.prune_empty_tab_group(previous, ctx);
         }
         let index = self.active_tab_index;
         match (target, &tab.group) {
-            (Some(group_id), _) => self.move_tab_to_group(index, group_id, ctx),
+            (Some(group_id), _) if self.tabs[index].group_id != Some(group_id) => {
+                let after = self.index_after_group(group_id).unwrap_or(self.tabs.len());
+                self.tabs[index].group_id = Some(group_id);
+                self.move_tab_to_index(index, after, ctx);
+            }
+            (Some(_), _) => {}
             (None, None) => {}
             (None, Some(key)) => {
                 let mut group = TabGroup::new();
