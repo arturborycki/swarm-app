@@ -420,6 +420,37 @@ pub unsafe fn make_dock_menu(menu: Menu) -> Retained<NSMenu> {
     }
 }
 
+/// Puts a status item showing the SF Symbol `symbol` in the menu bar, with
+/// `menu` (whose items update when it opens). It stays for the app's lifetime.
+pub unsafe fn install_status_item(symbol: &str, menu: Menu) {
+    unsafe {
+        let mtm = MainThreadMarker::new_unchecked();
+        let nsmenu = make_delegated_menu(Retained::as_ptr(&NSString::from_str(&menu.title)) as id);
+        let nsmenu = &*nsmenu.cast::<NSMenu>();
+        for item in menu.menu_items {
+            nsmenu.addItem(&*make_menu_item(item).cast::<NSMenuItem>());
+        }
+        let bar = objc2_app_kit::NSStatusBar::systemStatusBar();
+        let status_item = bar.statusItemWithLength(objc2_app_kit::NSVariableStatusItemLength);
+        if let Some(button) = status_item.button(mtm) {
+            let image = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                &NSString::from_str(symbol),
+                Some(&NSString::from_str(&menu.title)),
+            );
+            match image {
+                Some(image) => {
+                    image.setTemplate(true);
+                    button.setImage(Some(&image));
+                }
+                None => button.setTitle(&NSString::from_str(&menu.title)),
+            }
+        }
+        status_item.setMenu(Some(nsmenu));
+        // The status bar doesn't keep the item; it lives as long as the app.
+        std::mem::forget(status_item);
+    }
+}
+
 #[cfg(test)]
 #[path = "menus_tests.rs"]
 mod tests;

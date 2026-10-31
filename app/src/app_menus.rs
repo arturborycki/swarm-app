@@ -1238,6 +1238,92 @@ fn make_swarm_app_menu(ctx: &AppContext) -> Menu {
     Menu::new(crate::swarm::APP_NAME, menu_items)
 }
 
+/// swarm-term: the menu bar extra: every session by host (choosing one shows
+/// it), new session, open Swarm, settings and quit. It's there while windows
+/// are closed, as a reminder that sessions keep running.
+pub fn swarm_status_menu() -> Menu {
+    let show = |title: &str, action: Option<WorkspaceAction>| {
+        MenuItem::Custom(CustomMenuItem::new(
+            title,
+            move |ctx| ctx.dispatch_global_action("root_view:swarm_show", &action),
+            no_updates,
+            None,
+        ))
+    };
+    Menu::new(
+        crate::swarm::APP_NAME,
+        vec![
+            swarm_status_sessions_submenu("This Mac".to_string(), None),
+            MenuItem::Custom(CustomMenuItem::new_with_submenu(
+                "Remote Hosts",
+                |_| (),
+                |_props, _ctx| {
+                    #[cfg(unix)]
+                    let hosts = warp_terminal::local_tty::daemon::known_hosts();
+                    #[cfg(not(unix))]
+                    let hosts: Vec<String> = Vec::new();
+                    MenuItemPropertyChanges {
+                        disabled: Some(hosts.is_empty()),
+                        submenu: Some(Some(
+                            hosts.into_iter().map(|h| swarm_status_sessions_submenu(h.clone(), Some(h))).collect(),
+                        )),
+                        ..Default::default()
+                    }
+                },
+                None,
+                vec![],
+            )),
+            MenuItem::Separator,
+            show("New Session", Some(WorkspaceAction::SwarmNewSession { host: None })),
+            show("Open Swarm", None),
+            show("Settings…", Some(WorkspaceAction::ShowSettings)),
+            MenuItem::Separator,
+            MenuItem::Standard(StandardAction::Quit),
+        ],
+    )
+}
+
+/// `title` ▸ the sessions on `host` (`None`: this Mac), as last seen.
+fn swarm_status_sessions_submenu(title: String, host: Option<String>) -> MenuItem {
+    MenuItem::Custom(CustomMenuItem::new_with_submenu(
+        &title,
+        |_| (),
+        move |_props, ctx| {
+            let mut items = Vec::new();
+            #[cfg(unix)]
+            for session in crate::swarm::sessions::SwarmSessions::as_ref(ctx).sessions_on(host.as_deref()) {
+                let name = session.name.clone().unwrap_or_else(|| session.title.clone());
+                let state = if !session.is_running() {
+                    "exited".to_string()
+                } else {
+                    session.foreground.clone().unwrap_or_else(|| "idle".to_string())
+                };
+                let attached = if session.clients.is_empty() { " · detached" } else { "" };
+                let tab = crate::swarm::ReattachTab::for_session(host.as_deref(), session);
+                items.push(MenuItem::Custom(CustomMenuItem::new(
+                    &format!("{name} — {state}{attached}"),
+                    move |ctx| ctx.dispatch_global_action("root_view:swarm_open_session", &tab),
+                    no_updates,
+                    None,
+                )));
+            }
+            if items.is_empty() {
+                items.push(MenuItem::Custom(CustomMenuItem::new(
+                    "No sessions",
+                    |_| (),
+                    |_, _| MenuItemPropertyChanges { disabled: Some(true), ..Default::default() },
+                    None,
+                )));
+            }
+            #[cfg(not(unix))]
+            let _ = (&host, ctx);
+            MenuItemPropertyChanges { submenu: Some(Some(items)), ..Default::default() }
+        },
+        None,
+        vec![],
+    ))
+}
+
 /// swarm-term: `item` titled `name`, whatever its updater would call it.
 fn swarm_relabel(item: MenuItem, name: &'static str) -> MenuItem {
     match item {

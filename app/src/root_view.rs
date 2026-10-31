@@ -330,6 +330,50 @@ pub fn init(app: &mut AppContext) {
     );
     app.add_global_action("root_view:open_launch_config", open_launch_config);
     app.add_global_action("root_view:send_feedback", send_feedback);
+    // swarm-term: the menu bar extra brings Swarm forward, opening a window if
+    // there is none, then runs the action (if any) in the front window.
+    app.add_global_action("root_view:swarm_show", |action: &Option<WorkspaceAction>, ctx| {
+        if WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx).is_empty() {
+            open_new(&(), ctx);
+        }
+        let window_id = ctx.windows().activate_app().or_else(|| ctx.windows().frontmost_window_id());
+        if let (Some(action), Some(window_id)) = (action, window_id)
+            && let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(window_id, ctx)
+        {
+            workspace.update(ctx, |workspace, ctx| workspace.handle_action(action, ctx));
+        }
+    });
+    // swarm-term: show a daemon session: its tab, in whichever window has it,
+    // else reattached as a new tab in the front window.
+    app.add_global_action("root_view:swarm_open_session", |tab: &crate::swarm::ReattachTab, ctx| {
+        let focus_existing = |ctx: &mut AppContext| {
+            for (window_id, workspace) in WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx) {
+                if workspace.update(ctx, |workspace, ctx| workspace.swarm_focus_session(tab, ctx)) {
+                    ctx.windows().show_window_and_focus_app(window_id);
+                    return true;
+                }
+            }
+            false
+        };
+        if focus_existing(ctx) {
+            return;
+        }
+        if WorkspaceRegistry::as_ref(ctx).all_workspaces(ctx).is_empty() {
+            // A new window reopens the sessions marked to reopen, maybe this one.
+            open_new(&(), ctx);
+            if focus_existing(ctx) {
+                return;
+            }
+        }
+        let window_id = ctx.windows().activate_app().or_else(|| ctx.windows().frontmost_window_id());
+        if let Some(window_id) = window_id
+            && let Some(workspace) = WorkspaceRegistry::as_ref(ctx).get(window_id, ctx)
+        {
+            workspace.update(ctx, |workspace, ctx| {
+                workspace.handle_action(&WorkspaceAction::SwarmReattach(tab.clone()), ctx)
+            });
+        }
+    });
     // swarm-term: menu items acting on the active window.
     app.add_global_action("root_view:workspace_action", |action: &WorkspaceAction, ctx| {
         if let Some(workspace) = active_workspace(ctx) {

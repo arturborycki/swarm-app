@@ -1288,6 +1288,9 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.set_show_dock_icon_on_launch(show_dock_icon);
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|_| app_menus::dock_menu());
+        if crate::swarm::SWARM_CHROME {
+            app_builder.set_status_menu_builder("terminal", |_| app_menus::swarm_status_menu());
+        }
     }
 
     #[cfg(any(target_os = "linux", target_os = "freebsd"))]

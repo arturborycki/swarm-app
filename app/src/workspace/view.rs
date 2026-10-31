@@ -6558,6 +6558,26 @@ impl Workspace {
         }
     }
 
+    /// Activates the tab showing `tab`'s session, if one does; returns whether it did.
+    pub fn swarm_focus_session(&mut self, tab: &crate::swarm::ReattachTab, ctx: &mut ViewContext<Self>) -> bool {
+        let Some(warp_id) = tab.warp_session_id else { return false };
+        let index = self.tabs.iter().position(|t| {
+            t.pane_group
+                .as_ref(ctx)
+                .terminal_views(ctx)
+                .iter()
+                .any(|view| view.as_ref(ctx).active_block_session_id().is_some_and(|id| id.as_u64() == warp_id))
+        });
+        match index {
+            Some(index) => {
+                self.activate_tab_internal(index, ctx);
+                ctx.notify();
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Adds the group (`swarm::group_key`, empty for none) of each terminal
     /// session in this window's tabs to `groups`, keyed by Warp session id.
     pub fn swarm_session_groups(&self, groups: &mut HashMap<u64, String>, ctx: &AppContext) {

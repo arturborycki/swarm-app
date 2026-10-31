@@ -67,6 +67,14 @@ pub trait AppExt {
 
     /// Sets whether the application should show its Dock icon on launch.
     fn set_show_dock_icon_on_launch(&mut self, value: bool);
+
+    /// Sets the constructor of a menu bar extra (a status item at the right of
+    /// the menu bar, showing `symbol`, an SF Symbol name) and its menu.
+    fn set_status_menu_builder(
+        &mut self,
+        symbol: &'static str,
+        value: impl FnOnce(&mut AppContext) -> Menu + 'static,
+    );
 }
 
 type MenuBarBuilderFn = Box<dyn FnOnce(&mut AppContext) -> MenuBar>;
@@ -81,6 +89,7 @@ pub struct App {
     show_dock_icon_on_launch: bool,
     menu_bar_builder: Option<MenuBarBuilderFn>,
     dock_menu_builder: Option<DockMenuBuilderFn>,
+    status_menu_builder: Option<(&'static str, DockMenuBuilderFn)>,
     init_fn: Option<platform::app::AppInitCallbackFn>,
 }
 
@@ -123,6 +132,7 @@ impl App {
             show_dock_icon_on_launch: true,
             menu_bar_builder: None,
             dock_menu_builder: None,
+            status_menu_builder: None,
             init_fn: None,
         }
     }
@@ -212,6 +222,17 @@ impl AppExt for AppBuilder {
             AppBackend::Windowless(_) => (),
         }
     }
+
+    fn set_status_menu_builder(
+        &mut self,
+        symbol: &'static str,
+        value: impl FnOnce(&mut AppContext) -> Menu + 'static,
+    ) {
+        match self.as_inner_mut() {
+            AppBackend::CurrentPlatform(app) => app.status_menu_builder = Some((symbol, Box::new(value))),
+            AppBackend::Windowless(_) => (),
+        }
+    }
 }
 
 unsafe fn get_app(object: &mut Object) -> &mut App {
@@ -295,6 +316,11 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
             let nsmenu = make_dock_menu(dock_menu);
             // `setDockMenu:` is a custom warp app-delegate selector.
             let _: () = msg_send![&*app_delegate, setDockMenu: &*nsmenu];
+        }
+
+        if let Some((symbol, status_menu_builder)) = app.status_menu_builder.take() {
+            let status_menu = app.callbacks.with_mutable_app_context(status_menu_builder);
+            super::menus::install_status_item(symbol, status_menu);
         }
 
         let show_dock_icon = if app.show_dock_icon_on_launch {
