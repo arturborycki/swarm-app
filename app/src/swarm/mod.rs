@@ -195,6 +195,15 @@ pub fn use_daemon_sessions() -> bool {
     false
 }
 
+/// After a wake or a network change: remote tabs whose link died reconnect
+/// now rather than when ssh notices.
+pub fn check_daemon_links() {
+    #[cfg(unix)]
+    if let Some(daemons) = warp_terminal::local_tty::daemon::daemons() {
+        daemons.check_links();
+    }
+}
+
 /// Sessions that were open as tabs when the app last quit, in tab order.
 pub fn reattachable_tabs() -> Vec<ReattachTab> {
     #[cfg(unix)]

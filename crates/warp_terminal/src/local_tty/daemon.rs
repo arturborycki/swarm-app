@@ -137,6 +137,32 @@ impl Daemons {
         self.rt.block_on(f)
     }
 
+    /// Pings every remote daemon and drops the connections that don't answer
+    /// quickly, so their tabs reconnect now instead of when ssh notices (half
+    /// a minute later). Tabs already retrying try again at once. For after
+    /// sleep or a network change, when links are often dead but look open.
+    pub fn check_links(&'static self) {
+        LINKS_CHANGED.notify_waiters();
+        self.rt.spawn(async move {
+            let remotes: Vec<(String, Client)> = self
+                .clients
+                .lock()
+                .await
+                .iter()
+                .filter_map(|(host, c)| Some((host.clone()?, c.clone())))
+                .collect();
+            for (host, client) in remotes {
+                tokio::spawn(async move {
+                    let alive = tokio::time::timeout(LINK_CHECK_TIMEOUT, client.ping()).await.is_ok_and(|r| r.is_ok());
+                    if !alive {
+                        log::info!("swarm: link to {host} is dead; reconnecting");
+                        client.close();
+                    }
+                });
+            }
+        });
+    }
+
     /// Runs `f` on the daemon runtime and returns a receiver for its result,
     /// so UI code can await it without a tokio context.
     pub fn run<T: Send + 'static>(
@@ -570,6 +596,10 @@ async fn run_bridge(
 /// keeps failing.
 /// Daemon session ids whose tab lost its connection and is retrying.
 static RECONNECTING: LazyLock<Mutex<std::collections::HashSet<String>>> = LazyLock::new(Default::default);
+/// Woken by [`Daemons::check_links`]: retries skip the rest of their backoff.
+static LINKS_CHANGED: LazyLock<tokio::sync::Notify> = LazyLock::new(tokio::sync::Notify::new);
+/// How long a live link may take to answer a ping after a wake.
+const LINK_CHECK_TIMEOUT: Duration = Duration::from_secs(4);
 static LINK_LISTENER: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>> = std::sync::OnceLock::new();
 
 static LINK_LOST_LISTENER: std::sync::OnceLock<Box<dyn Fn(Option<String>, String) + Send + Sync>> =
@@ -625,6 +655,7 @@ async fn try_reconnect(
     for attempt in 1..=40 {
         tokio::select! {
             _ = tokio::time::sleep(delay) => {}
+            _ = LINKS_CHANGED.notified() => {}
             c = ctl.recv() => {
                 if matches!(c, Some(Ctl::Detach) | None) {
                     return None;

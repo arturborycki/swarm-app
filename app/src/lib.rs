@@ -2694,6 +2694,9 @@ pub(crate) fn app_callbacks(
 ) -> warpui::platform::AppCallbacks {
     warpui::platform::AppCallbacks {
         on_internet_reachability_changed: Some(Box::new(move |reachable, ctx| {
+            if reachable {
+                swarm::check_daemon_links();
+            }
             NetworkStatus::handle(ctx)
                 .update(ctx, move |me, ctx| me.reachability_changed(reachable, ctx));
         })),
@@ -2722,6 +2725,7 @@ pub(crate) fn app_callbacks(
         on_cpu_awakened: Some(Box::new(move |ctx| {
             SystemStats::handle(ctx).update(ctx, move |system, ctx| {
                 log::info!("System has returned from sleep");
+                swarm::check_daemon_links();
                 system.dispatch_cpu_was_awakened(ctx);
             });
         })),
