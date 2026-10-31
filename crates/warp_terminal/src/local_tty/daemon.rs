@@ -917,6 +917,9 @@ pub struct DaemonStatus {
     pub os: String,
     /// `at-login` start mode (a launchd agent or systemd user unit).
     pub at_login: bool,
+    /// Sessions are recreated after a reboot (`swarmd restore on`); `None`
+    /// when the daemon predates the feature.
+    pub restore_after_reboot: Option<bool>,
     pub sessions: usize,
     pub running: usize,
     pub detached: usize,
@@ -930,11 +933,14 @@ pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
     let sessions = client.list().await?;
     let info = client.daemon().clone();
     let at_login = swarmd_command(host, &["service", "status"]).await?.contains("start mode: at-login");
+    let restore_after_reboot =
+        swarmd_command(host, &["restore", "status"]).await.ok().map(|out| out.contains("restore after reboot: on"));
     Ok(DaemonStatus {
         version: info.version,
         hostname: info.hostname,
         os: info.os,
         at_login,
+        restore_after_reboot,
         sessions: sessions.len(),
         running: sessions.iter().filter(|s| s.is_running()).count(),
         detached: sessions.iter().filter(|s| s.is_running() && s.clients.is_empty()).count(),
@@ -945,6 +951,11 @@ pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
 pub async fn set_start_at_login(host: Option<&str>, at_login: bool) -> Result<()> {
     let args: &[&str] = if at_login { &["service", "install"] } else { &["service", "uninstall"] };
     swarmd_command(host, args).await.map(|_| ())
+}
+
+/// Turns restoring sessions after a reboot on or off for `host`'s daemon.
+pub async fn set_restore_after_reboot(host: Option<&str>, on: bool) -> Result<()> {
+    swarmd_command(host, &["restore", if on { "on" } else { "off" }]).await.map(|_| ())
 }
 
 /// Stops `host`'s daemon and starts it again. Sessions keep running (the

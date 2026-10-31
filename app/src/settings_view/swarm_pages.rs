@@ -106,6 +106,7 @@ fn buttons_row(children: Vec<Box<dyn Element>>) -> Box<dyn Element> {
 #[derive(Clone, Debug)]
 pub enum DaemonPageAction {
     SetAtLogin(bool),
+    SetRestore(bool),
     Restart,
     OpenLogs,
     Refresh,
@@ -199,6 +200,12 @@ impl TypedActionView for DaemonPageView {
                 self.run_task(note, async move { daemon::set_start_at_login(None, at_login).await }, ctx);
             }
             #[cfg(unix)]
+            DaemonPageAction::SetRestore(on) => {
+                let on = *on;
+                let note = if on { "Turning on restore after restart…" } else { "Turning off restore after restart…" };
+                self.run_task(note, async move { daemon::set_restore_after_reboot(None, on).await }, ctx);
+            }
+            #[cfg(unix)]
             DaemonPageAction::Restart => {
                 self.run_task("Restarting the daemon…", async { daemon::restart_daemon(None).await }, ctx);
             }
@@ -234,6 +241,7 @@ impl View for DaemonPageView {
 #[derive(Default)]
 struct DaemonWidget {
     at_login_switch: SwitchStateHandle,
+    restore_switch: SwitchStateHandle,
     restart: MouseStateHandle,
     logs: MouseStateHandle,
     refresh: MouseStateHandle,
@@ -256,6 +264,10 @@ impl SettingsWidget for DaemonWidget {
 
         #[cfg(unix)]
         {
+            let restore = match &view.status {
+                Load::Ready(status) => status.restore_after_reboot,
+                _ => None,
+            };
             let (headline, detail, at_login, ready) = match &view.status {
                 Load::Loading => ("Checking the daemon…".to_string(), String::new(), false, false),
                 Load::Ready(status) => {
@@ -309,6 +321,24 @@ impl SettingsWidget for DaemonWidget {
                         .into(),
                 ),
             ));
+            if let Some(restore) = restore {
+                let switch = appearance
+                    .ui_builder()
+                    .switch(self.restore_switch.clone())
+                    .check(restore)
+                    .build()
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(DaemonPageAction::SetRestore(!restore)))
+                    .finish();
+                column.add_child(build_toggle_element(
+                    line(appearance, "Restore sessions after a restart".into(), false),
+                    switch,
+                    appearance,
+                    Some(
+                        "When the Mac restarts, programs in your sessions end. With this on, each session comes back as a new shell with the same name, folder, group and tab position."
+                            .into(),
+                    ),
+                ));
+            }
         }
         #[cfg(not(unix))]
         let _ = view;
