@@ -19,6 +19,16 @@ use crate::workspace::WorkspaceAction;
 
 pub struct DataSource;
 
+/// Whether `text` reads as an ssh destination: `user@host` or a dotted host
+/// name, with no spaces (so ordinary searches don't offer to connect).
+fn looks_like_host(text: &str) -> bool {
+    !text.is_empty()
+        && !text.contains(char::is_whitespace)
+        && (text.contains('@') || text.contains('.'))
+        && !text.starts_with(['-', '.', '@'])
+        && text.chars().all(|c| c.is_ascii_alphanumeric() || "@.-_".contains(c))
+}
+
 impl Entity for DataSource {
     type Event = ();
 }
@@ -40,6 +50,14 @@ impl SyncDataSource for DataSource {
             let sessions = SwarmSessions::as_ref(app);
             let mut hosts: Vec<Option<String>> = vec![None];
             hosts.extend(daemon::known_hosts().into_iter().map(Some));
+            // A host that isn't in ~/.ssh/config: `user@host` or a host name.
+            if looks_like_host(term) {
+                items.push((
+                    format!("Connect to {term}"),
+                    "over ssh".to_string(),
+                    WorkspaceAction::SwarmConnectHost(term.to_string()),
+                ));
+            }
             for host in &hosts {
                 let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
                 for session in sessions.sessions_on(host.as_deref()) {
@@ -73,6 +91,9 @@ impl SyncDataSource for DataSource {
                 // Running sessions to reattach come before starting new ones.
                 if matches!(action, WorkspaceAction::SwarmReattach(_)) {
                     match_result.score += 1;
+                }
+                if matches!(action, WorkspaceAction::SwarmConnectHost(_)) {
+                    match_result.score += 1000;
                 }
                 Some(QueryResult::from(SearchItem { label, detail, action, match_result }))
             })
@@ -137,5 +158,20 @@ impl crate::search::item::SearchItem for SearchItem {
 
     fn accessibility_help_message(&self) -> Option<String> {
         Some("Press enter to open this session.".into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::looks_like_host;
+
+    #[test]
+    fn host_like_queries() {
+        for yes in ["me@devbox", "build.example.com", "me@10.0.0.5", "ci-01.internal"] {
+            assert!(looks_like_host(yes), "{yes}");
+        }
+        for no in ["", "palette", "new session", "@host", ".hidden", "a;b@c", "-oProxyCommand=x"] {
+            assert!(!looks_like_host(no), "{no}");
+        }
     }
 }

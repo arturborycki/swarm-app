@@ -1955,7 +1955,7 @@ impl TerminalView {
     ) -> Vec<MenuItem<TerminalAction>> {
         let mut items = Vec::new();
         // swarm-term: sharing goes through Warp's servers.
-        if crate::swarm::SWARM_CHROME {
+        if crate::swarm::HIDE_WARP_SERVICES {
             return items;
         }
 

@@ -6425,6 +6425,15 @@ impl Workspace {
         if items.is_empty() {
             items.push(MenuItemFields::new("No hosts in ~/.ssh/config").with_disabled(true).into_item());
         }
+        // Any other host: typed as user@host in the session picker.
+        items.push(
+            MenuItemFields::new("Other Host…")
+                .with_on_select_action(WorkspaceAction::TogglePalette {
+                    mode: PaletteMode::Navigation,
+                    source: PaletteSource::Keybinding,
+                })
+                .into_item(),
+        );
         self.open_swarm_hosts_menu(items, ctx);
     }
 

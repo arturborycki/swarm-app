@@ -488,7 +488,7 @@ impl TabData {
 
         if FeatureFlag::CreatingSharedSessions.is_enabled()
             && ContextFlag::CreateSharedSession.is_enabled()
-            && !crate::swarm::SWARM_CHROME
+            && !crate::swarm::HIDE_WARP_SERVICES
         {
             let shared_session_view_ids = self.pane_group.as_ref(ctx).shared_session_view_ids(ctx);
             let focused_session_view = self.pane_group.as_ref(ctx).focused_session_view(ctx);

@@ -11,6 +11,10 @@ pub mod sessions;
 /// Swarm's own window chrome (title bar, session menus) instead of Warp's.
 pub const SWARM_CHROME: bool = true;
 
+/// Hide Warp features that need Warp's servers (session sharing). Off in unit
+/// tests, which still cover those features.
+pub const HIDE_WARP_SERVICES: bool = SWARM_CHROME && !cfg!(test);
+
 /// The product name shown in menus and titles.
 pub const APP_NAME: &str = "Swarm";
 
@@ -165,7 +169,10 @@ pub fn shows_settings_section(section: crate::settings_view::SettingsSection) ->
 /// Whether shells live in `swarmd` sessions. Then Warp's own window/tab
 /// restore is off: the daemon's sessions are the tabs to bring back.
 pub fn use_daemon_sessions() -> bool {
-    #[cfg(unix)]
+    // Unit tests drive Warp's own terminals, not daemon sessions.
+    #[cfg(test)]
+    return false;
+    #[cfg(all(unix, not(test)))]
     return warp_terminal::local_tty::daemon::enabled();
     #[cfg(not(unix))]
     false
