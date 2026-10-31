@@ -95,6 +95,13 @@ static DAEMONS: LazyLock<Option<Daemons>> = LazyLock::new(|| {
     }
 });
 
+/// How this app appears in a session's client list: "Swarm on <this host>".
+pub fn client_name() -> String {
+    let host = gethostname::gethostname().to_string_lossy().into_owned();
+    let host = host.strip_suffix(".local").unwrap_or(&host).to_string();
+    format!("Swarm on {host}")
+}
+
 /// The shared connections, if daemon sessions are on.
 pub fn daemons() -> Option<&'static Daemons> {
     if enabled() {
@@ -117,8 +124,8 @@ impl Daemons {
             clients.remove(&key);
         }
         let c = match host {
-            None => Client::connect_local("warp").await.context("connect to swarmd")?,
-            Some(h) => Client::connect_ssh(h, "warp").await.with_context(|| format!("connect to swarmd on {h}"))?,
+            None => Client::connect_local(&client_name()).await.context("connect to swarmd")?,
+            Some(h) => Client::connect_ssh(h, &client_name()).await.with_context(|| format!("connect to swarmd on {h}"))?,
         };
         clients.insert(key, c.clone());
         Ok(c)

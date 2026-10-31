@@ -605,6 +605,8 @@ const THEME_CHOOSER_RATIO: f32 = 3.5;
 pub(crate) const TAB_BAR_POSITION_ID: &str = "workspace_view:tab_bar";
 const TEAM_SWITCHER_PILL_POSITION_ID: &str = "workspace_view:team_switcher_pill";
 const SWARM_DETACHED_BUTTON_POSITION_ID: &str = "workspace_view:swarm_detached_button";
+/// Height of the status bar under the active session.
+const SWARM_STATUS_BAR_HEIGHT: f32 = 24.;
 const SWARM_CONNECT_BUTTON_POSITION_ID: &str = "workspace_view:swarm_connect_button";
 const TEAM_SWITCHER_DOT_ALPHA: u8 = 204;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -6572,24 +6574,31 @@ impl Workspace {
 
     /// Opens `tab`'s session as a tab, in the tab group it was in.
     fn add_swarm_tab(&mut self, tab: &crate::swarm::ReattachTab, ctx: &mut ViewContext<Self>) {
+        let grouped = FeatureFlag::GroupedTabs.is_enabled();
+        // Remote sessions without a group of their own are grouped by host.
+        let group_key = tab.group.clone().or_else(|| tab.host.clone());
+        let in_host_group = grouped && tab.host.is_some() && group_key == tab.host;
+        // Under its host's group header, an unnamed session shows its shell's
+        // title rather than repeating the host.
+        let title = if in_host_group { tab.name.clone() } else { tab.title() };
         self.add_tab_with_pane_layout(
             PanesLayout::SingleTerminal(Box::new(crate::swarm::reattach_terminal_options(tab))),
             Arc::new(HashMap::new()),
-            tab.title(),
+            title,
             ctx,
         );
-        // A remote session's tab wears its host's color.
-        if let Some(host) = &tab.host {
+        // A remote session's tab wears its host's color, unless its host's
+        // group does (one swatch per host, as in the sidebar mockup).
+        if let Some(host) = tab.host.as_ref().filter(|_| !in_host_group) {
             let index = self.active_tab_index;
             if matches!(self.tabs[index].selected_color, SelectedTabColor::Unset) {
                 self.tabs[index].selected_color = SelectedTabColor::Color(crate::swarm::host_color(host));
             }
         }
-        if !FeatureFlag::GroupedTabs.is_enabled() {
+        if !grouped {
             return;
         }
-        let target = tab
-            .group
+        let target = group_key
             .as_ref()
             .and_then(|key| self.tab_groups.values().find(|g| crate::swarm::group_key(g) == *key))
             .map(|g| g.id);
@@ -6606,7 +6615,7 @@ impl Workspace {
             self.prune_empty_tab_group(previous, ctx);
         }
         let index = self.active_tab_index;
-        match (target, &tab.group) {
+        match (target, &group_key) {
             (Some(group_id), _) if self.tabs[index].group_id != Some(group_id) => {
                 let after = self.index_after_group(group_id).unwrap_or(self.tabs.len());
                 self.tabs[index].group_id = Some(group_id);
@@ -6619,6 +6628,9 @@ impl Workspace {
                 match key.strip_prefix('#').and_then(|id| uuid::Uuid::parse_str(id).ok()) {
                     Some(id) => group.id = TabGroupId(id),
                     None => group.name = Some(key.clone()),
+                }
+                if in_host_group && let Some(host) = &tab.host {
+                    group.color = SelectedTabColor::Color(crate::swarm::host_color(host));
                 }
                 self.tabs[index].group_id = Some(group.id);
                 self.tab_groups.insert(group.id, group);
@@ -21649,6 +21661,62 @@ impl Workspace {
         .finish()
     }
 
+    /// swarm-term: the thin bar under the active session: "This Mac · zsh ·
+    /// ~/src/api · 132×38" and who else is attached. Nothing for a terminal
+    /// that isn't a daemon session.
+    #[cfg(unix)]
+    fn render_swarm_status_bar(&self, appearance: &Appearance, ctx: &AppContext) -> Option<Box<dyn Element>> {
+        let pane_group = self.active_tab_pane_group().as_ref(ctx);
+        let session_id = pane_group
+            .terminal_view_from_pane_id(pane_group.focused_pane_id(ctx), ctx)?
+            .as_ref(ctx)
+            .active_block_session_id()?;
+        let status = crate::swarm::sessions::SwarmSessions::as_ref(ctx).status_for(session_id.as_u64())?;
+        let mut parts = vec![status.host.clone().unwrap_or_else(|| "This Mac".to_string())];
+        parts.extend(status.shell.clone());
+        parts.extend(status.cwd.clone());
+        parts.push(format!("{}×{}", status.size.0, status.size.1));
+        let me = warp_terminal::local_tty::daemon::client_name();
+        let attached = if status.others.is_empty() {
+            "Only this window".to_string()
+        } else {
+            let names: Vec<String> = status
+                .others
+                .iter()
+                .map(|n| if *n == me { "another window".to_string() } else { n.clone() })
+                .collect();
+            format!("Also attached: {}", names.join(", "))
+        };
+
+        let theme = appearance.theme();
+        let color = theme.sub_text_color(theme.background());
+        let font = appearance.ui_font_family();
+        let text = |s: String| Text::new_inline(s, font, 11.).with_color(color.into()).with_clip(ClipConfig::ellipsis()).finish();
+        let row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., text(parts.join("  ·  "))).finish())
+            .with_child(Container::new(text(attached)).with_margin_left(16.).finish())
+            .finish();
+        Some(
+            ConstrainedBox::new(
+                Container::new(row)
+                    .with_padding_left(14.)
+                    .with_padding_right(14.)
+                    .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_2(theme)))
+                    .finish(),
+            )
+            .with_height(SWARM_STATUS_BAR_HEIGHT)
+            .finish(),
+        )
+    }
+
+    #[cfg(not(unix))]
+    fn render_swarm_status_bar(&self, _appearance: &Appearance, _ctx: &AppContext) -> Option<Box<dyn Element>> {
+        None
+    }
+
     /// swarm-term: right side of the title bar. "N detached" appears while
     /// sessions are running with nothing attached.
     #[cfg(unix)]
@@ -27629,6 +27697,11 @@ impl View for Workspace {
             let content = self.render_banner_and_active_tab(app, appearance);
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), false);
             outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
+            if crate::swarm::SWARM_CHROME
+                && let Some(status_bar) = self.render_swarm_status_bar(appearance, app)
+            {
+                outer_column.add_child(status_bar);
+            }
             Container::new(outer_column.finish())
                 .with_background(util::get_terminal_background_fill(self.window_id, app))
                 .finish()

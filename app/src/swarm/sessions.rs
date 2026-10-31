@@ -46,6 +46,14 @@ pub struct SessionStatus {
     pub host: Option<String>,
     /// The foreground command, while one runs.
     pub command: Option<String>,
+    /// The session's shell (its program's name).
+    pub shell: Option<String>,
+    /// Its working directory, `~`-relative on this Mac.
+    pub cwd: Option<String>,
+    /// Columns × rows.
+    pub size: (u16, u16),
+    /// The other clients attached to it ("Swarm on mini-2", "swarmctl").
+    pub others: Vec<String>,
 }
 
 impl SessionStatus {
@@ -232,11 +240,33 @@ impl SwarmSessions {
         } else {
             SessionMark::Idle
         };
+        // This app is one client of the session; any other is someone else.
+        let me = daemon::client_name();
+        let mut others: Vec<String> = session.clients.iter().map(|c| c.name.clone()).collect();
+        if let Some(i) = others.iter().position(|n| *n == me) {
+            others.remove(i);
+        }
+        let cwd = session.cwd.clone().map(|cwd| match (host, dirs::home_dir()) {
+            (None, Some(home)) => match std::path::Path::new(&cwd).strip_prefix(&home) {
+                Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
+                Ok(rest) => format!("~/{}", rest.display()),
+                Err(_) => cwd,
+            },
+            _ => cwd,
+        });
+        let shell = session.command.first().map(|program| {
+            let name = program.rsplit('/').next().unwrap_or(program);
+            name.trim_start_matches('-').to_string()
+        });
         Some(SessionStatus {
             mark,
-            elsewhere: session.is_running() && session.clients.len() > 1,
+            elsewhere: session.is_running() && !others.is_empty(),
             host: host.clone(),
             command: session.foreground.clone(),
+            shell,
+            cwd,
+            size: (session.size.cols, session.size.rows),
+            others,
         })
     }
 
