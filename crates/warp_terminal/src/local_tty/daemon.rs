@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use instant::Instant;
-use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size};
+use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size, VERSION};
 use swarm_client::{strip_terminal_responses, Attachment, Client, StreamEvent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
@@ -103,6 +103,72 @@ pub fn client_name() -> String {
     format!("Swarm on {host}")
 }
 
+async fn connect(host: Option<&str>) -> Result<Client> {
+    match host {
+        None => Client::connect_local(&client_name()).await.context("connect to swarmd"),
+        Some(h) => Client::connect_ssh(h, &client_name()).await.with_context(|| format!("connect to swarmd on {h}")),
+    }
+}
+
+/// Hosts (`None`: this Mac) whose daemon this app has tried to bring up to
+/// its own build; tried once per run, so a failed update doesn't loop.
+static UPGRADE_TRIED: LazyLock<Mutex<std::collections::HashSet<Option<String>>>> = LazyLock::new(Default::default);
+
+/// Replaces `host`'s daemon, which runs another build than this app, with
+/// this app's: on a remote host the binaries are copied over first, then the
+/// daemon is restarted in place. Sessions keep running (their shims are
+/// untouched and re-adopted). If that can't be done, `old` stays in use.
+async fn upgrade_daemon(host: Option<&str>, old: Client) -> Result<Client> {
+    let place = host.unwrap_or("this Mac");
+    log::info!("swarm: {place} runs swarmd {}, this app has {VERSION}; updating it", old.daemon().version);
+    if let Some(h) = host
+        && let Err(e) = update_remote_binaries(h).await
+    {
+        log::warn!("swarm: not updating swarmd on {h}: {e:#}");
+        return Ok(old);
+    }
+    if let Err(e) = old.shutdown_daemon().await {
+        log::warn!("swarm: couldn't stop swarmd on {place}: {e:#}");
+        return Ok(old);
+    }
+    drop(old);
+    let mut last = Err(anyhow::anyhow!("the daemon didn't come back"));
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        match connect(host).await {
+            Ok(c) if c.daemon().version == VERSION => {
+                log::info!("swarm: {place} now runs swarmd {VERSION}");
+                return Ok(c);
+            }
+            // The old daemon may still answer for a moment while it stops.
+            Ok(c) => last = Ok(c),
+            Err(e) if last.is_err() => last = Err(e),
+            Err(_) => {}
+        }
+    }
+    if let Ok(c) = &last {
+        log::warn!("swarm: {place} still runs swarmd {}", c.daemon().version);
+    }
+    last
+}
+
+/// Copies this app's `swarmd` to `host` if the one there is the copy this app
+/// installed and the app has the current build for `host`'s platform.
+async fn update_remote_binaries(host: &str) -> Result<()> {
+    let ours = ssh(host, &format!(r#"[ -x "$HOME/{REMOTE_BIN_DIR}/swarmd" ]"#)).await?;
+    if !ours.status.success() {
+        bail!("its swarmd wasn't installed by Swarm");
+    }
+    let uname = ssh(host, "uname -sm").await?;
+    let platform = platform_from_uname(&String::from_utf8_lossy(&uname.stdout));
+    let dir = bundled_swarmd_dir(&platform).with_context(|| format!("this app has no swarmd for {platform}"))?;
+    let bundled = std::fs::read(dir.join("swarmd")).context("read the bundled swarmd")?;
+    if !bundled.windows(VERSION.len()).any(|w| w == VERSION.as_bytes()) {
+        bail!("this app's swarmd for {platform} is from another build than the app");
+    }
+    install_swarmd(host).await
+}
+
 /// The shared connections, if daemon sessions are on.
 pub fn daemons() -> Option<&'static Daemons> {
     if enabled() {
@@ -124,10 +190,10 @@ impl Daemons {
             }
             clients.remove(&key);
         }
-        let c = match host {
-            None => Client::connect_local(&client_name()).await.context("connect to swarmd")?,
-            Some(h) => Client::connect_ssh(h, &client_name()).await.with_context(|| format!("connect to swarmd on {h}"))?,
-        };
+        let mut c = connect(host).await?;
+        if c.daemon().version != VERSION && UPGRADE_TRIED.lock().unwrap().insert(key.clone()) {
+            c = upgrade_daemon(host, c).await?;
+        }
         clients.insert(key, c.clone());
         Ok(c)
     }
