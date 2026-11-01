@@ -20797,25 +20797,23 @@ impl Workspace {
             && member_range.contains(&self.active_tab_index);
 
         let mut row = Flex::row().with_cross_axis_alignment(CrossAxisAlignment::Center);
-        // Header fills one slot like a member tab capped at the same 200px as a tab.
-        row.add_child(
-            Shrinkable::new(
-                1.0,
-                ConstrainedBox::new(self.render_horizontal_tab_group_header(
-                    group,
-                    &mouse_states,
-                    is_collapsed,
-                    any_member_active,
-                    is_first_in_bar,
-                    group_color,
-                    appearance,
-                    ctx,
-                ))
-                .with_max_width(200.)
-                .finish(),
-            )
-            .finish(),
+        let header = self.render_horizontal_tab_group_header(
+            group,
+            &mouse_states,
+            is_collapsed,
+            any_member_active,
+            is_first_in_bar,
+            group_color,
+            appearance,
+            ctx,
         );
+        if crate::swarm::SWARM_CHROME {
+            // swarm-term: a host label as wide as its name.
+            row.add_child(ConstrainedBox::new(header).with_max_width(200.).finish());
+        } else {
+            // Header fills one slot like a member tab capped at the same 200px as a tab.
+            row.add_child(Shrinkable::new(1.0, ConstrainedBox::new(header).with_max_width(200.).finish()).finish());
+        }
 
         if !is_collapsed {
             // Edge spacer before the first member (own flex slot, doesn't
@@ -20907,7 +20905,8 @@ impl Workspace {
         // same idle opacity a member tab uses, so the member tabs blend into the
         // container and the group reads as one colored block.
         let mut container = Container::new(row.finish());
-        if let Some(color) = group_color {
+        // swarm-term: host groups are marked by their label's swatch instead.
+        if let Some(color) = group_color.filter(|_| !crate::swarm::SWARM_CHROME) {
             container = container.with_background(coloru_with_opacity(color, 20));
         }
         let container = container.finish();
@@ -21145,6 +21144,13 @@ impl Workspace {
             .finish()
         };
 
+        // swarm-term: the host's name in small capitals after its swatch.
+        let content = if crate::swarm::SWARM_CHROME && !is_being_renamed {
+            let swatch = group_color.map(Fill::Solid).unwrap_or_else(|| theme.accent());
+            swarm_tab_bar_host_label(&title, swatch, appearance)
+        } else {
+            content
+        };
         let header_active_bg = internal_colors::fg_overlay_2(theme);
         let header_hover_bg = internal_colors::fg_overlay_1(theme);
         let header_border_fill = if header_selected {
@@ -22165,11 +22171,24 @@ impl Workspace {
             let slots = self.tab_bar_slots();
 
             // Render each slot in the tab bar, either an individual tab or tab group.
-            for slot in &slots {
+            for (slot_index, slot) in slots.iter().enumerate() {
                 let start_index = match slot {
                     TabBarSlot::Single { index } => *index,
                     TabBarSlot::Group { first_index, .. } => *first_index,
                 };
+                // swarm-term: tabs on this Mac are labeled like a host group
+                // ("THIS MAC"), as in the tabs mockup.
+                if crate::swarm::SWARM_CHROME
+                    && let TabBarSlot::Single { index } = slot
+                    && !matches!(slot_index.checked_sub(1).map(|i| &slots[i]), Some(TabBarSlot::Single { .. }))
+                    && !crate::swarm::pane_group_is_remote(self.tabs[*index].pane_group.as_ref(ctx), ctx)
+                {
+                    tab_bar.add_child(swarm_tab_bar_host_label(
+                        "This Mac",
+                        appearance.theme().accent(),
+                        appearance,
+                    ));
+                }
                 // Insert ghost slot before this slot's first tab if the drag
                 // would land here.
                 if ghost
@@ -22223,6 +22242,13 @@ impl Workspace {
                             );
                         } else {
                             tab_bar.add_child(self.render_tab_in_tab_bar(i, tab_bar_state, ctx));
+                        }
+                        // swarm-term: a divider between these tabs and the
+                        // host group after them (groups draw their own after).
+                        if crate::swarm::SWARM_CHROME
+                            && matches!(slots.get(slot_index + 1), Some(TabBarSlot::Group { .. }))
+                        {
+                            tab_bar.add_child(swarm_tab_bar_divider(appearance));
                         }
                     }
                 }
@@ -27807,6 +27833,17 @@ impl View for Workspace {
                 outer_column.add_child(self.render_tab_bar(self.tab_fixed_width, appearance, app));
             }
             let content = self.render_banner_and_active_tab(app, appearance);
+            // swarm-term: a translucent sidebar (only while the sidebar shows).
+            let sidebar_shown = FeatureFlag::VerticalTabs.is_enabled()
+                && *TabSettings::as_ref(app).use_vertical_tabs
+                && self.vertical_tabs_panel_open;
+            let translucent = sidebar_shown
+                .then(|| util::swarm_translucent_sidebar_fills(self.window_id, app))
+                .flatten();
+            let content = match &translucent {
+                Some((_, terminal_layer)) => Container::new(content).with_background(*terminal_layer).finish(),
+                None => content,
+            };
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), false);
             outer_column.add_child(Shrinkable::new(1.0, panels_row).finish());
             if crate::swarm::SWARM_CHROME
@@ -27815,7 +27852,10 @@ impl View for Workspace {
                 outer_column.add_child(status_bar);
             }
             Container::new(outer_column.finish())
-                .with_background(util::get_terminal_background_fill(self.window_id, app))
+                .with_background(match translucent {
+                    Some((window, _)) => window,
+                    None => util::get_terminal_background_fill(self.window_id, app),
+                })
                 .finish()
         };
         let mut stack = Stack::new();
@@ -30882,4 +30922,52 @@ fn transferred_tab_placeholder_layout() -> PanesLayout {
         .env_vars
         .insert(warp_terminal::local_tty::daemon::NO_DAEMON_ENV.into(), "1".into());
     PanesLayout::SingleTerminal(Box::new(options))
+}
+
+/// swarm-term: a host's label in the tab bar: a swatch of its color and its
+/// name in small capitals.
+fn swarm_tab_bar_host_label(name: &str, swatch: Fill, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    Container::new(
+        Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_spacing(6.)
+            .with_child(
+                ConstrainedBox::new(
+                    Container::new(Empty::new().finish())
+                        .with_background(swatch)
+                        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.)))
+                        .finish(),
+                )
+                .with_width(8.)
+                .with_height(8.)
+                .finish(),
+            )
+            .with_child(
+                Text::new_inline(name.to_uppercase(), appearance.ui_font_family(), 11.)
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .with_color(theme.sub_text_color(theme.background()).into())
+                    .with_clip(ClipConfig::end())
+                    .finish(),
+            )
+            .finish(),
+    )
+    .with_horizontal_padding(8.)
+    .finish()
+}
+
+/// swarm-term: the line between hosts in the tab bar.
+fn swarm_tab_bar_divider(appearance: &Appearance) -> Box<dyn Element> {
+    Container::new(
+        ConstrainedBox::new(
+            Container::new(Empty::new().finish())
+                .with_background(internal_colors::fg_overlay_3(appearance.theme()))
+                .finish(),
+        )
+        .with_width(1.)
+        .with_height(20.)
+        .finish(),
+    )
+    .with_horizontal_padding(4.)
+    .finish()
 }

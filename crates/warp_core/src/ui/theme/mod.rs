@@ -17,6 +17,37 @@ use crate::paths::themes_dir;
 // Import relative_luminance from contrast module for brightness calculation
 use crate::ui::color::contrast::relative_luminance;
 
+/// swarm-term: whether macOS asks for more contrast (Accessibility → Display →
+/// Increase Contrast). Translucent text and outlines are then drawn stronger.
+static INCREASED_CONTRAST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn set_increased_contrast(on: bool) {
+    INCREASED_CONTRAST.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub fn increased_contrast() -> bool {
+    INCREASED_CONTRAST.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// A text opacity, moved halfway to opaque with increased contrast.
+pub fn text_opacity(opacity: Opacity) -> Opacity {
+    if increased_contrast() { stronger_text(opacity) } else { opacity }
+}
+
+/// An outline or overlay opacity, doubled with increased contrast.
+pub fn overlay_opacity(opacity: Opacity) -> Opacity {
+    if increased_contrast() { stronger_overlay(opacity) } else { opacity }
+}
+
+fn stronger_text(opacity: Opacity) -> Opacity {
+    opacity + (100 - opacity.min(100)) / 2
+}
+
+fn stronger_overlay(opacity: Opacity) -> Opacity {
+    opacity.saturating_mul(2).min(100)
+}
+
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Image {
     pub source: AssetSource,
@@ -634,11 +665,22 @@ impl WarpTheme {
     }
 
     pub fn details(&self) -> CustomDetails {
-        match self.details {
+        let mut details = match self.details {
             Details::Darker => CustomDetails::darker_details(),
             Details::Lighter => CustomDetails::lighter_details(),
             Details::Custom(details) => details,
-        }
+        };
+        details.main_text_opacity = text_opacity(details.main_text_opacity);
+        details.sub_text_opacity = text_opacity(details.sub_text_opacity);
+        details.hint_text_opacity = text_opacity(details.hint_text_opacity);
+        details.disabled_text_opacity = text_opacity(details.disabled_text_opacity);
+        details
+    }
+
+    /// swarm-term: the same theme with another accent color (the system's).
+    pub fn with_accent(mut self, accent: Fill) -> Self {
+        self.accent = accent;
+        self
     }
 
     pub fn inferred_color_scheme(&self) -> ColorScheme {
@@ -679,3 +721,20 @@ pub fn mock_terminal_colors() -> TerminalColors {
 #[cfg(test)]
 #[path = "theme_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+mod contrast_tests {
+    use super::{stronger_overlay, stronger_text};
+
+    #[test]
+    fn increased_contrast_strengthens_without_passing_opaque() {
+        assert_eq!(stronger_text(90), 95);
+        assert_eq!(stronger_text(60), 80);
+        assert_eq!(stronger_text(20), 60);
+        assert_eq!(stronger_text(100), 100);
+        assert_eq!(stronger_overlay(5), 10);
+        assert_eq!(stronger_overlay(20), 40);
+        assert_eq!(stronger_overlay(60), 100);
+        assert_eq!(stronger_overlay(200), 100);
+    }
+}

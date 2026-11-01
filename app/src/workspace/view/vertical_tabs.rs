@@ -3560,7 +3560,8 @@ fn has_unseen_swarm_output(typed: &TypedPane<'_>, app: &AppContext) -> bool {
 fn swarm_session_icon(terminal_view: &TerminalView, theme: &WarpTheme, app: &AppContext) -> Option<IconWithStatusVariant> {
     #[cfg(unix)]
     {
-        let (icon, icon_color) = swarm_session_status(terminal_view, app)?.mark.icon(theme);
+        let status = swarm_session_status(terminal_view, app)?;
+        let (icon, icon_color) = status.mark.icon(theme, status.host.as_deref());
         Some(IconWithStatusVariant::Neutral { icon, icon_color })
     }
     #[cfg(not(unix))]

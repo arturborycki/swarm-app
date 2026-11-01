@@ -465,17 +465,17 @@ pub mod internal_colors {
 
     /// The color of most text throughout the UI.
     pub fn text_main(warp_theme: &WarpTheme, background: impl Into<ColorU>) -> ColorU {
-        coloru_with_opacity(font_color(warp_theme, background), 90)
+        coloru_with_opacity(font_color(warp_theme, background), crate::ui::theme::text_opacity(90))
     }
 
     /// The color of subheaders and similar lower priority text.
     pub fn text_sub(warp_theme: &WarpTheme, background: impl Into<ColorU>) -> ColorU {
-        coloru_with_opacity(font_color(warp_theme, background), 60)
+        coloru_with_opacity(font_color(warp_theme, background), crate::ui::theme::text_opacity(60))
     }
 
     /// The color of text elements that are disabled or the lowest priority.
     pub fn text_disabled(warp_theme: &WarpTheme, background: impl Into<ColorU>) -> ColorU {
-        coloru_with_opacity(font_color(warp_theme, background), 40)
+        coloru_with_opacity(font_color(warp_theme, background), crate::ui::theme::text_opacity(40))
     }
 
     // TODO (roland): evaluate whether text_disabled above is intentionally different or if it should be consolidated with this
@@ -537,19 +537,19 @@ pub mod internal_colors {
     }
 
     pub fn fg_overlay_1(warp_theme: &WarpTheme) -> Fill {
-        warp_theme.foreground().with_opacity(5)
+        warp_theme.foreground().with_opacity(crate::ui::theme::overlay_opacity(5))
     }
 
     pub fn fg_overlay_2(warp_theme: &WarpTheme) -> Fill {
-        warp_theme.foreground().with_opacity(10)
+        warp_theme.foreground().with_opacity(crate::ui::theme::overlay_opacity(10))
     }
 
     pub fn fg_overlay_3(warp_theme: &WarpTheme) -> Fill {
-        warp_theme.foreground().with_opacity(15)
+        warp_theme.foreground().with_opacity(crate::ui::theme::overlay_opacity(15))
     }
 
     pub fn fg_overlay_4(warp_theme: &WarpTheme) -> Fill {
-        warp_theme.foreground().with_opacity(20)
+        warp_theme.foreground().with_opacity(crate::ui::theme::overlay_opacity(20))
     }
 
     pub fn fg_overlay_5(warp_theme: &WarpTheme) -> Fill {

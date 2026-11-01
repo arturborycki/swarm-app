@@ -441,10 +441,7 @@ impl View for SwarmPicker {
         for (host, count) in self.hosts(app) {
             let picked = host == self.host;
             let label = format!("{}  {count}", host.clone().unwrap_or_else(|| "This Mac".to_string()));
-            let swatch_color: Fill = match &host {
-                Some(h) => super::host_color(h).to_ansi_color(&theme.terminal_colors().normal).into(),
-                None => theme.terminal_colors().normal.blue.into(),
-            };
+            let swatch_color: Fill = super::host_fill(theme, host.as_deref());
             let key = format!("host:{}", host.clone().unwrap_or_default());
             let action = SwarmPickerAction::PickHost(host);
             segments.add_child(
@@ -590,7 +587,7 @@ impl View for SwarmPicker {
             let checked = self.selected.contains(&s.id);
             let highlighted = index == self.cursor;
             let mark = if s.foreground.is_some() { SessionMark::Busy } else { SessionMark::Idle };
-            let (icon, icon_color) = mark.icon(theme);
+            let (icon, icon_color) = mark.icon(theme, self.host.as_deref());
             let elsewhere = s.clients.iter().any(|c| c.name != me);
 
             let checkbox = {

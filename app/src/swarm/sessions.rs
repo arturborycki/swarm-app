@@ -40,15 +40,17 @@ pub enum SessionMark {
 
 impl SessionMark {
     /// The mark's shape and color, as tabs and sidebar rows draw it.
+    /// Idle and running sessions wear their host's color (see `host_fill`).
     pub fn icon(
         self,
         theme: &warp_core::ui::theme::WarpTheme,
+        host: Option<&str>,
     ) -> (warp_core::ui::Icon, warp_core::ui::theme::Fill) {
         use warp_core::ui::Icon;
         let colors = theme.terminal_colors().normal;
         match self {
-            SessionMark::Idle => (Icon::CircleFilled, colors.blue.into()),
-            SessionMark::Busy => (Icon::CircleHalf, colors.blue.into()),
+            SessionMark::Idle => (Icon::CircleFilled, super::host_fill(theme, host)),
+            SessionMark::Busy => (Icon::CircleHalf, super::host_fill(theme, host)),
             SessionMark::Attention => (Icon::AlertCircle, colors.red.into()),
             SessionMark::Exited => (Icon::CircleRing, theme.disabled_ui_text_color()),
             SessionMark::Reconnecting => (Icon::Refresh, colors.yellow.into()),
@@ -278,6 +280,19 @@ impl SwarmSessions {
     /// How many things need the user's attention (the Dock badge).
     pub fn attention_count(&self) -> usize {
         self.attention.len()
+    }
+
+    /// What needs the user's attention, as the Dock menu lists it: the
+    /// session's tab, and what happened to it.
+    pub fn needing_attention(&self) -> Vec<(super::ReattachTab, String)> {
+        self.attention
+            .iter()
+            .filter_map(|((host, id), body)| {
+                let session = self.sessions_on(host.as_deref()).iter().find(|s| &s.id == id)?;
+                let tab = super::ReattachTab::for_session(host.as_deref(), session);
+                Some((tab, body.trim_end_matches('.').to_string()))
+            })
+            .collect()
     }
 
     /// Running local sessions no client is attached to, oldest first.

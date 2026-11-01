@@ -93,19 +93,45 @@ pub fn menu_bar(ctx: &mut AppContext) -> MenuBar {
 // Creates the app dock menu
 // Menu here instead of MenuBar, since we only need one vec<MenuItem> in the dock
 // To create submenus, we could use MenuItem::Custom(CustomMenuItem::new_with_submenu(...))
-pub fn dock_menu() -> Menu {
-    Menu::new(
+pub fn dock_menu(ctx: &AppContext) -> Menu {
+    let new_window = MenuItem::Custom(CustomMenuItem::new(
         "New Window",
-        vec![MenuItem::Custom(CustomMenuItem::new(
-            "New Window",
-            move |ctx| {
-                ctx.dispatch_global_action("root_view:open_new", &());
-                ctx.dispatch_global_action("workspace:save_app", &());
-            },
+        move |ctx| {
+            ctx.dispatch_global_action("root_view:open_new", &());
+            ctx.dispatch_global_action("workspace:save_app", &());
+        },
+        no_updates,
+        Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
+    ));
+    if !crate::swarm::SWARM_CHROME {
+        return Menu::new("New Window", vec![new_window]);
+    }
+    // swarm-term: what needs attention (sessions that failed, connections
+    // that were lost), then New Session. Rebuilt each time the Dock shows it.
+    let mut items = Vec::new();
+    #[cfg(unix)]
+    for (tab, what) in crate::swarm::sessions::SwarmSessions::as_ref(ctx).needing_attention() {
+        items.push(MenuItem::Custom(CustomMenuItem::new(
+            &what,
+            move |ctx| ctx.dispatch_global_action("root_view:swarm_open_session", &tab),
             no_updates,
-            Some(Keystroke::parse("cmd-n").expect("Valid keystroke")),
-        ))],
-    )
+            None,
+        )));
+    }
+    #[cfg(not(unix))]
+    let _ = ctx;
+    if !items.is_empty() {
+        items.push(MenuItem::Separator);
+    }
+    let new_session = Some(WorkspaceAction::SwarmNewSession { host: None });
+    items.push(MenuItem::Custom(CustomMenuItem::new(
+        "New Session",
+        move |ctx| ctx.dispatch_global_action("root_view:swarm_show", &new_session),
+        no_updates,
+        None,
+    )));
+    items.push(new_window);
+    Menu::new("New Window", items)
 }
 
 fn custom_shortcut(action: CustomAction) -> Option<Keystroke> {

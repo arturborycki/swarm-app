@@ -87,7 +87,7 @@ use crate::view_components::action_button::{ActionButton, ButtonSize, NakedTheme
 use crate::view_components::{Dropdown, DropdownItem, FilterableDropdown};
 use crate::window_settings::{
     BackgroundBackdrop, BackgroundBlurRadius, BackgroundOpacity, LeftPanelVisibilityAcrossTabs,
-    OpenWindowsAtCustomSize, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
+    OpenWindowsAtCustomSize, TranslucentSidebar, WindowSettings, WindowSettingsChangedEvent, ZoomLevel,
 };
 use crate::workspace::WorkspaceAction;
 use crate::workspace::header_toolbar_editor::HeaderToolbarInlineEditor;
@@ -484,6 +484,7 @@ pub enum AppearancePageAction {
     ToggleCursorBlink,
     ToggleRespectSystemTheme,
     ToggleOpenWindowsAtCustomSize,
+    ToggleTranslucentSidebar,
     ToggleDimInactivePanes,
     ToggleAllAvailableFonts,
     ToggleMatchNotebookToMonospaceFontSize,
@@ -623,6 +624,13 @@ impl TypedActionView for AppearanceSettingsPageView {
             ToggleCompactMode => self.toggle_compact_mode(ctx),
             ToggleCursorBlink => self.toggle_cursor_blink(ctx),
             ToggleOpenWindowsAtCustomSize => self.toggle_open_windows_at_custom_size(ctx),
+            ToggleTranslucentSidebar => {
+                WindowSettings::handle(ctx).update(ctx, |window_settings, ctx| {
+                    let on = !*window_settings.translucent_sidebar.value();
+                    report_if_error!(window_settings.translucent_sidebar.set_value(on, ctx));
+                });
+                ctx.notify();
+            }
             ToggleRespectSystemTheme => self.toggle_respect_system_theme(ctx),
             ToggleAllAvailableFonts => self.toggle_all_available_fonts(ctx),
             ToggleDimInactivePanes => self.toggle_dim_inactive_panes(ctx),
@@ -1387,6 +1395,12 @@ impl AppearanceSettingsPageView {
             .is_supported_on_current_platform()
         {
             window_settings_widgets.push(Box::new(WindowBlurWidget::default()));
+        }
+        if window_settings
+            .translucent_sidebar
+            .is_supported_on_current_platform()
+        {
+            window_settings_widgets.push(Box::new(TranslucentSidebarWidget::default()));
         }
         if window_settings
             .background_backdrop
@@ -3145,6 +3159,51 @@ impl SettingsWidget for CustomAppIconWidget {
             column
         };
         column.finish()
+    }
+}
+
+/// swarm-term: the sidebar more see-through than the terminal.
+#[derive(Default)]
+struct TranslucentSidebarWidget {
+    switch_state: SwitchStateHandle,
+}
+
+impl SettingsWidget for TranslucentSidebarWidget {
+    type View = AppearanceSettingsPageView;
+
+    fn search_terms(&self) -> &str {
+        "translucent sidebar vibrancy transparency"
+    }
+
+    fn render(
+        &self,
+        view: &Self::View,
+        appearance: &Appearance,
+        app: &AppContext,
+    ) -> Box<dyn Element> {
+        let window_settings = WindowSettings::as_ref(app);
+        render_body_item::<AppearancePageAction>(
+            "Translucent sidebar".into(),
+            None,
+            LocalOnlyIconState::for_setting(
+                TranslucentSidebar::storage_key(),
+                TranslucentSidebar::sync_to_cloud(),
+                &mut view.local_only_icon_tooltip_states.borrow_mut(),
+                app,
+            ),
+            ToggleState::Enabled,
+            appearance,
+            appearance
+                .ui_builder()
+                .switch(self.switch_state.clone())
+                .check(*window_settings.translucent_sidebar.value())
+                .build()
+                .on_click(move |ctx, _, _| {
+                    ctx.dispatch_typed_action(AppearancePageAction::ToggleTranslucentSidebar);
+                })
+                .finish(),
+            None,
+        )
     }
 }
 

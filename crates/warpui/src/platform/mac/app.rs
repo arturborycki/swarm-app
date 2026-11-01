@@ -63,8 +63,9 @@ pub trait AppExt {
     /// Sets the main menu bar constructor function.
     fn set_menu_bar_builder(&mut self, value: impl FnOnce(&mut AppContext) -> MenuBar + 'static);
 
-    /// Sets the macOS dock menu constructor function.
-    fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static);
+    /// Sets the macOS dock menu constructor function. It runs each time the
+    /// Dock shows the menu, so the menu can list what's current.
+    fn set_dock_menu_builder(&mut self, value: impl Fn(&mut AppContext) -> Menu + 'static);
 
     /// Sets whether the application should show its Dock icon on launch.
     fn set_show_dock_icon_on_launch(&mut self, value: bool);
@@ -80,6 +81,7 @@ pub trait AppExt {
 
 type MenuBarBuilderFn = Box<dyn FnOnce(&mut AppContext) -> MenuBar>;
 type DockMenuBuilderFn = Box<dyn FnOnce(&mut AppContext) -> Menu>;
+type DockMenuFn = Box<dyn Fn(&mut AppContext) -> Menu>;
 
 /// The actual application, from the perspective of the platform and the
 /// main event loop.  This is the true owner of all application state.
@@ -89,7 +91,7 @@ pub struct App {
     dev_icon: Option<Cow<'static, [u8]>>,
     show_dock_icon_on_launch: bool,
     menu_bar_builder: Option<MenuBarBuilderFn>,
-    dock_menu_builder: Option<DockMenuBuilderFn>,
+    dock_menu_builder: Option<DockMenuFn>,
     status_menu_builder: Option<(&'static str, DockMenuBuilderFn)>,
     init_fn: Option<platform::app::AppInitCallbackFn>,
 }
@@ -210,7 +212,7 @@ impl AppExt for AppBuilder {
         }
     }
 
-    fn set_dock_menu_builder(&mut self, value: impl FnOnce(&mut AppContext) -> Menu + 'static) {
+    fn set_dock_menu_builder(&mut self, value: impl Fn(&mut AppContext) -> Menu + 'static) {
         match self.as_inner_mut() {
             AppBackend::CurrentPlatform(app) => app.dock_menu_builder = Some(Box::new(value)),
             AppBackend::Windowless(_) => (),
@@ -312,12 +314,7 @@ pub unsafe extern "C-unwind" fn warp_app_will_finish_launching(this: &mut Object
             ns_app.setMainMenu(Some(&nsmenu));
         }
 
-        if let Some(dock_menu_builder) = app.dock_menu_builder.take() {
-            let dock_menu = app.callbacks.with_mutable_app_context(dock_menu_builder);
-            let nsmenu = make_dock_menu(dock_menu);
-            // `setDockMenu:` is a custom warp app-delegate selector.
-            let _: () = msg_send![&*app_delegate, setDockMenu: &*nsmenu];
-        }
+        set_dock_menu(app, &*app_delegate);
 
         if let Some((symbol, status_menu_builder)) = app.status_menu_builder.take() {
             let status_menu = app.callbacks.with_mutable_app_context(status_menu_builder);
@@ -595,6 +592,24 @@ extern "C-unwind" fn warp_app_open_urls(this: &mut Object, urls: id) {
 
     let app = unsafe { get_app(this) };
     app.callbacks.open_urls(urls);
+}
+
+/// Builds the Dock menu again and gives it to the app delegate.
+fn set_dock_menu<T: objc2::Message>(app: &mut App, app_delegate: &T) {
+    if let Some(builder) = app.dock_menu_builder.as_ref() {
+        let dock_menu = app.callbacks.with_mutable_app_context(|ctx| builder(ctx));
+        let nsmenu = unsafe { make_dock_menu(dock_menu) };
+        // `setDockMenu:` is a custom warp app-delegate selector.
+        let _: () = unsafe { msg_send![app_delegate, setDockMenu: &*nsmenu] };
+    }
+}
+
+/// swarm-term: called when the Dock is about to show the app's menu.
+#[unsafe(no_mangle)]
+extern "C-unwind" fn warp_app_refresh_dock_menu(this: &mut Object) {
+    let delegate = this as *mut Object as *const objc2::runtime::AnyObject;
+    let app = unsafe { get_app(this) };
+    set_dock_menu(app, unsafe { &*delegate });
 }
 
 #[unsafe(no_mangle)]

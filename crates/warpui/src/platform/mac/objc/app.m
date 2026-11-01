@@ -199,6 +199,7 @@ NSUInteger activeScreenId() {
 - (void)dealloc {
     [NSApp removeObserver:self forKeyPath:@"effectiveAppearance" context:NSAppThemeChangeContext];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
+    [[[NSWorkspace sharedWorkspace] notificationCenter] removeObserver:self];
     [internetReachable stopNotifier];
     [internetReachable release];
     [super dealloc];
@@ -222,6 +223,21 @@ NSUInteger activeScreenId() {
             forKeyPath:@"effectiveAppearance"
                options:(NSKeyValueObservingOptionNew | NSKeyValueObservingOptionOld)
                context:NSAppThemeChangeContext];
+    // swarm-term: the accent color and Increase Contrast also change how the
+    // theme is drawn, so they're reported the same way as light/dark.
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(systemLookChanged:)
+                                                 name:NSSystemColorsDidChangeNotification
+                                               object:nil];
+    [[[NSWorkspace sharedWorkspace] notificationCenter]
+        addObserver:self
+           selector:@selector(systemLookChanged:)
+               name:NSWorkspaceAccessibilityDisplayOptionsDidChangeNotification
+             object:nil];
+}
+
+- (void)systemLookChanged:(NSNotification *)note {
+    if (rustWrapper) warp_app_os_appearance_changed(self);
 }
 
 - (void)observeValueForKeyPath:(NSString *)keyPath
@@ -464,6 +480,7 @@ static BOOL isSystemInitiatedTermination(void) {
 
 // Returns a new NSMenu in the mac dock. Gets called every time we pull up the dock menu
 - (NSMenu *)applicationDockMenu:(NSApplication *)sender {
+    if (rustWrapper) warp_app_refresh_dock_menu(self);
     return self.dockMenu;
 }
 

@@ -398,6 +398,38 @@ pub fn get_terminal_background_fill(
     theme.background().with_opacity(terminal_opacity).into()
 }
 
+/// swarm-term: with a translucent sidebar, the window's background is drawn
+/// thinner (what the sidebar shows) and the terminal's area gets a second
+/// layer that brings it back to the window opacity. Returns (window, terminal)
+/// fills; `None` when the sidebar isn't translucent.
+pub fn swarm_translucent_sidebar_fills(
+    window_id: WindowId,
+    app: &AppContext,
+) -> Option<(warpui::elements::Fill, warpui::elements::Fill)> {
+    if !*WindowSettings::as_ref(app).translucent_sidebar {
+        return None;
+    }
+    let theme = Appearance::as_ref(app).theme();
+    let (window, terminal) = translucent_sidebar_opacities(get_terminal_background_opacity(window_id, app));
+    Some((
+        theme.background().with_opacity(window).into(),
+        theme.background().with_opacity(terminal).into(),
+    ))
+}
+
+/// For a window `opacity` (percent): the window's own background, which the
+/// sidebar shows (70% of it), and the extra layer over the terminal's area
+/// that brings it back to `opacity`.
+fn translucent_sidebar_opacities(opacity: u8) -> (u8, u8) {
+    let terminal = opacity.min(100) as f32 / 100.;
+    let sidebar = terminal * 0.7;
+    // Two layers a and b over each other cover 1 - (1 - a)(1 - b).
+    let layer = 1. - (1. - terminal) / (1. - sidebar);
+    let percent = |value: f32| (value * 100.).round().clamp(0., 100.) as u8;
+    (percent(sidebar), percent(layer))
+}
+
+
 fn get_terminal_background_opacity(window_id: WindowId, app: &AppContext) -> u8 {
     let theme = Appearance::as_ref(app).theme();
     let background_opacity = WindowSettings::as_ref(app)
@@ -439,4 +471,21 @@ pub fn team_switcher_menu_items(
         fields.into_item()
     }));
     items
+}
+
+#[cfg(test)]
+mod translucent_sidebar_tests {
+    use super::translucent_sidebar_opacities;
+
+    #[test]
+    fn the_terminal_keeps_the_window_opacity() {
+        for opacity in [20u8, 50, 88, 100] {
+            let (window, layer) = translucent_sidebar_opacities(opacity);
+            let (a, b) = (window as f32 / 100., layer as f32 / 100.);
+            let covered = 1. - (1. - a) * (1. - b);
+            assert!((covered * 100. - opacity as f32).abs() <= 1., "{opacity}: {window} + {layer}");
+            assert!(window < opacity, "the sidebar shows more than the terminal");
+        }
+        assert_eq!(translucent_sidebar_opacities(88), (62, 69));
+    }
 }

@@ -7,6 +7,7 @@
 
 #[cfg(unix)]
 pub mod connect;
+pub mod look;
 #[cfg(unix)]
 pub mod picker;
 #[cfg(unix)]
@@ -130,6 +131,15 @@ pub fn host_color(host: &str) -> warp_core::ui::theme::AnsiColorIdentifier {
     const COLORS: [warp_core::ui::theme::AnsiColorIdentifier; 5] = [Cyan, Magenta, Yellow, Green, Blue];
     let hash = host.bytes().fold(0u32, |h, b| h.wrapping_mul(31).wrapping_add(b as u32));
     COLORS[hash as usize % COLORS.len()]
+}
+
+/// The color that stands for `host` (`None`: this Mac) in marks and swatches:
+/// the system accent color for this Mac, the host's own color otherwise.
+pub fn host_fill(theme: &warp_core::ui::theme::WarpTheme, host: Option<&str>) -> warp_core::ui::theme::Fill {
+    match host {
+        Some(host) => host_color(host).to_ansi_color(&theme.terminal_colors().normal).into(),
+        None => theme.accent(),
+    }
 }
 
 /// Whether a tab holds a remote daemon session. Those can't be dragged out to

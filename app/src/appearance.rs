@@ -138,6 +138,7 @@ impl AppearanceManager {
             let theme_kind = active_theme_kind(ThemeSettings::as_ref(ctx), ctx);
             Settings::theme_for_theme_kind(&theme_kind, ctx)
         };
+        let new_theme = crate::swarm::look::adjust_theme(new_theme);
 
         #[cfg(target_family = "wasm")]
         emit_theme_background_event(&new_theme);
@@ -419,7 +420,7 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
     let line_height_ratio = *FontSettings::as_ref(ctx).line_height_ratio.value();
 
     let theme_kind = active_theme_kind(ThemeSettings::as_ref(ctx), ctx);
-    let theme = Settings::theme_for_theme_kind(&theme_kind, ctx);
+    let theme = crate::swarm::look::adjust_theme(Settings::theme_for_theme_kind(&theme_kind, ctx));
     #[cfg(target_family = "wasm")]
     emit_theme_background_event(&theme);
 

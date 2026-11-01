@@ -49,6 +49,18 @@ define_settings_group!(WindowSettings, settings: [
         toml_path: "appearance.window.override_opacity",
         description: "The opacity of the window background, from 1 to 100 percent.",
     },
+    // swarm-term: the sidebar shows more of what's behind the window than the
+    // terminal does, like the sidebars of other Mac apps.
+    translucent_sidebar: TranslucentSidebar {
+        type: bool,
+        default: crate::swarm::SWARM_CHROME,
+        supported_platforms: SupportedPlatforms::MAC,
+        sync_to_cloud: SyncToCloud::Globally(RespectUserSyncSetting::Yes),
+        surface: settings::SettingSurfaces::GUI,
+        private: false,
+        toml_path: "appearance.window.translucent_sidebar",
+        description: "Whether the sidebar is more see-through than the terminal.",
+    },
     open_windows_at_custom_size: OpenWindowsAtCustomSize {
         type: bool,
         default: false,

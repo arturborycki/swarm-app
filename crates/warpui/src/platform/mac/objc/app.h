@@ -18,6 +18,7 @@
 // Functions implemented in Rust.
 void warp_app_will_finish_launching(id app);
 void warp_app_did_become_active(id app);
+void warp_app_refresh_dock_menu(id app);
 void warp_app_did_resign_active(id app);
 void warp_app_will_terminate(id app);
 void warp_app_open_files(id app, id filenames);

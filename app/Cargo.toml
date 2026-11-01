@@ -284,7 +284,10 @@ mach2 = "0.5"
 objc.workspace = true
 objc2.workspace = true
 objc2-app-kit = { workspace = true, features = [
+    "NSAccessibility",
     "NSApplication",
+    "NSColor",
+    "NSColorSpace",
     "NSImage",
     "NSResponder",
     "NSRunningApplication",
@@ -297,6 +300,7 @@ objc2-foundation = { workspace = true, features = [
     "NSPathUtilities",
     "NSString",
     "NSURL",
+    "NSUserDefaults",
 ] }
 permissions = "0.4.1"
 pprof = { workspace = true, optional = true, features = ["frame-pointer"] }

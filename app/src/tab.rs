@@ -1098,6 +1098,9 @@ pub struct TabComponent<'a> {
     locator: PaneViewLocator,
     /// swarm-term: false for a remote session's tab (it can't move windows).
     can_tear_off: bool,
+    /// swarm-term: the color of the session's host, drawn as a line along
+    /// the top of the selected tab.
+    swarm_host_fill: Option<ThemeFill>,
     /// True when this tab is part of a multi-tab (count > 1) selection. Drives
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
@@ -1211,9 +1214,10 @@ impl<'a> TabComponent<'a> {
         let shell_indicator_type = tab.pane_group.as_ref(ctx).focused_shell_indicator_type(ctx);
         // swarm-term: an idle session's mark yields to other indicators; any
         // other state is shown over them.
-        let swarm_mark = Self::swarm_session_mark(tab, ctx);
+        let (swarm_mark, swarm_host) = Self::swarm_session_mark(tab, ctx).unzip();
+        let swarm_host = swarm_host.flatten();
         let swarm_indicator = |mark: crate::swarm::sessions::SessionMark| {
-            let (icon, color) = mark.icon(appearance.theme());
+            let (icon, color) = mark.icon(appearance.theme(), swarm_host.as_deref());
             Indicator::SwarmSession { icon, color }
         };
         let swarm_busy = swarm_mark.filter(|m| *m != crate::swarm::sessions::SessionMark::Idle);
@@ -1288,6 +1292,8 @@ impl<'a> TabComponent<'a> {
             is_in_multi_tab_selection: false,
             shortcut_hint_label,
             has_unseen_output: Self::has_unseen_swarm_output(tab, ctx),
+            swarm_host_fill: swarm_mark
+                .map(|_| crate::swarm::host_fill(appearance.theme(), swarm_host.as_deref())),
         }
     }
 
@@ -1344,13 +1350,19 @@ impl<'a> TabComponent<'a> {
         false
     }
 
-    /// The state of the daemon session in the tab's focused terminal.
-    fn swarm_session_mark(tab: &TabData, app: &AppContext) -> Option<crate::swarm::sessions::SessionMark> {
+    /// The state of the daemon session in the tab's focused terminal, and
+    /// its host (`None`: this Mac).
+    fn swarm_session_mark(
+        tab: &TabData,
+        app: &AppContext,
+    ) -> Option<(crate::swarm::sessions::SessionMark, Option<String>)> {
         #[cfg(unix)]
         {
             let terminal_view = tab.pane_group.as_ref(app).focused_session_view(app)?;
             let id = terminal_view.as_ref(app).active_block_session_id()?;
-            crate::swarm::sessions::SwarmSessions::as_ref(app).status_for(id.as_u64()).map(|status| status.mark)
+            crate::swarm::sessions::SwarmSessions::as_ref(app)
+                .status_for(id.as_u64())
+                .map(|status| (status.mark, status.host))
         }
         #[cfg(not(unix))]
         {
@@ -2123,6 +2135,14 @@ impl<'a> TabComponent<'a> {
                 )],
             )
             .finish()
+        };
+
+        // swarm-term: the selected tab carries its host's color along its top.
+        let stack = match self.swarm_host_fill.filter(|_| is_active && crate::swarm::SWARM_CHROME) {
+            Some(fill) => Container::new(stack)
+                .with_border(Border::all(2.).with_sides(true, false, false, false).with_border_fill(fill))
+                .finish(),
+            None => stack,
         };
 
         // Grouped member: inset rounded highlight, no side dividers. It still
