@@ -1094,6 +1094,9 @@ where
                     self.handler.on_iterm_image_data_received(image_data);
                 } else if params[1].starts_with(b"FileEnd") {
                     self.handler.end_iterm_image_receiving();
+                } else if let Some(ms) = params[1].strip_prefix(b"SwarmTime=") {
+                    let ms = str::from_utf8(ms).ok().and_then(|ms| ms.parse().ok());
+                    self.handler.set_output_time(ms);
                 } else {
                     unhandled(params)
                 }

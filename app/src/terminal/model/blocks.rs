@@ -335,6 +335,10 @@ pub struct BlockList {
 
     restored_session_ts: Option<DateTime<Local>>,
 
+    /// When the output being processed was written, if not now: Swarm marks
+    /// replayed shell hooks with their time, so replayed blocks keep it.
+    output_time: Option<DateTime<Local>>,
+
     latest_block_finished_time: Option<SystemTime>,
     /// Whether the next prompt must avoid repeating deferred completion work for an already-finished
     /// active block that recovery advanced past.
@@ -699,6 +703,7 @@ impl BlockList {
             honor_ps1,
             is_restored_session: false,
             restored_session_ts: None,
+            output_time: None,
             latest_block_finished_time: None,
             skip_next_after_block_completed_event: false,
             early_output: EarlyOutput::new(event_proxy),
@@ -3056,6 +3061,15 @@ impl BlockList {
     /// Prepares an active block whose command start was not observed.
     pub(super) fn ensure_active_block_started(&mut self) {
         self.active_block_mut().ensure_started_for_preexec();
+        if let Some(ts) = self.output_time {
+            self.active_block_mut().override_start_ts(ts);
+        }
+    }
+
+    pub(super) fn set_output_time(&mut self, unix_ms: Option<u64>) {
+        self.output_time = unix_ms
+            .and_then(|ms| DateTime::from_timestamp_millis(ms as i64))
+            .map(|ts| ts.with_timezone(&Local));
     }
 
     /// Moves an unfinished active block through a minimal preexec-equivalent transition so its
@@ -3314,6 +3328,9 @@ impl BlockList {
         } else {
             self.skip_next_after_block_completed_event = false;
             self.active_block_mut().finish(data.exit_code);
+            if let Some(ts) = self.output_time {
+                self.active_block_mut().override_completed_ts(ts);
+            }
             self.latest_block_finished_time = Some(instant::SystemTime::now());
         }
         self.update_active_block_height();

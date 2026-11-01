@@ -3045,6 +3045,10 @@ impl ansi::Handler for TerminalModel {
         self.commit_lifecycle_transition(&transition);
     }
 
+    fn set_output_time(&mut self, unix_ms: Option<u64>) {
+        self.block_list.set_output_time(unix_ms);
+    }
+
     fn set_current_working_directory(&mut self, path: String) {
         // OSC 7 is honor-system: the parser only accepts payloads whose host
         // matches our local hostname, but a wrapper SSH session streams the

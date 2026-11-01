@@ -484,6 +484,9 @@ fn to_size(size: &SizeInfo) -> Size {
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Ends the output times that replayed hooks carry (`OSC 1337 ; SwarmTime=`).
+const OUTPUT_TIME_NOW: &[u8] = b"\x1b]1337;SwarmTime=\x07";
+
 async fn run_bridge(
     daemons: &'static Daemons,
     host: Option<String>,
@@ -506,6 +509,8 @@ async fn run_bridge(
     let mut last_offset = att.replay_from;
     let mut guard_until: Option<Instant> = None;
     let mut eol_marks = swarm_client::EolMarkFilter::default();
+    // Replayed hooks carry the time they were written; live output is "now".
+    let mut timed = false;
     let mut buf = vec![0u8; 64 * 1024];
     quiet_output(&id, ATTACH_GRACE);
 
@@ -516,7 +521,8 @@ async fn run_bridge(
                     let end = offset + data.len() as u64;
                     // Replayed output may go to a narrower screen than it was
                     // written for; zsh's partial-line marks would show there.
-                    let out = if replay {
+                    let mut out = if replay {
+                        timed = true;
                         let mut out = eol_marks.push(&data);
                         if end >= att.live_from {
                             out.extend(eol_marks.finish());
@@ -524,9 +530,16 @@ async fn run_bridge(
                         out
                     } else {
                         let mut out = eol_marks.finish();
+                        if std::mem::take(&mut timed) {
+                            out.extend_from_slice(OUTPUT_TIME_NOW);
+                        }
                         out.extend_from_slice(&data);
                         out
                     };
+                    if replay && end >= att.live_from {
+                        timed = false;
+                        out.extend_from_slice(OUTPUT_TIME_NOW);
+                    }
                     if wr.write_all(&out).await.is_err() {
                         break;
                     }

@@ -272,6 +272,11 @@ pub trait Handler {
     /// waiting for the shell to redraw its prompt.
     fn set_current_working_directory(&mut self, _path: String) {}
 
+    /// When the output that follows was written, in ms since the epoch, or
+    /// `None` for "now". Sent by Swarm (`OSC 1337 ; SwarmTime=<ms>`) before
+    /// replayed shell hooks, so replayed blocks keep their real times.
+    fn set_output_time(&mut self, _unix_ms: Option<u64>) {}
+
     /// Callback for the Warp preexec hook.
     fn preexec(&mut self, _data: PreexecValue) {}
 
