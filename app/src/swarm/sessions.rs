@@ -17,6 +17,8 @@ pub struct SwarmSessions {
     attention: BTreeMap<(Host, String), String>,
     /// Daemon session ids whose tab is reconnecting, as last announced.
     reconnecting: BTreeSet<String>,
+    /// An announcement of reconnecting tabs is scheduled.
+    link_announcement_due: bool,
     tx: async_channel::Sender<(Host, Vec<DaemonSession>)>,
 }
 
@@ -131,6 +133,7 @@ impl SwarmSessions {
             by_host: BTreeMap::new(),
             attention: BTreeMap::new(),
             reconnecting: BTreeSet::new(),
+            link_announcement_due: false,
             tx,
         };
         if super::use_daemon_sessions() {
@@ -208,20 +211,54 @@ impl SwarmSessions {
         ctx.emit(SwarmSessionsEvent::Changed);
     }
 
-    /// Tabs started or stopped reconnecting: tell VoiceOver which.
+    /// Tabs started or stopped reconnecting. A dropped link takes all of a
+    /// host's tabs with it, each noticing a moment apart, so VoiceOver is told
+    /// a little later, once per host.
     fn on_link_change(&mut self, ctx: &mut ModelContext<Self>) {
-        let now: BTreeSet<String> = daemon::reconnecting_sessions().into_iter().collect();
-        for id in now.difference(&self.reconnecting) {
-            announce(format!("{} lost its connection; reconnecting", self.spoken_name(id)), ctx);
+        ctx.emit(SwarmSessionsEvent::Changed);
+        if std::mem::replace(&mut self.link_announcement_due, true) {
+            return;
         }
-        for id in self.reconnecting.difference(&now) {
-            // A tab that gave up is announced as a lost connection instead.
-            if !self.attention.keys().any(|(_, a)| a == id) {
-                announce(format!("{} reconnected", self.spoken_name(id)), ctx);
-            }
+        let _ = ctx.spawn(
+            async { warpui::r#async::Timer::after(std::time::Duration::from_millis(600)).await },
+            |me, _, ctx| me.announce_link_changes(ctx),
+        );
+    }
+
+    fn announce_link_changes(&mut self, ctx: &mut ModelContext<Self>) {
+        self.link_announcement_due = false;
+        let now: BTreeSet<String> = daemon::reconnecting_sessions().into_iter().collect();
+        let lost: Vec<&String> = now.difference(&self.reconnecting).collect();
+        for text in self.spoken_groups(&lost, "lost its connection; reconnecting", "lost their connection; reconnecting") {
+            announce(text, ctx);
+        }
+        // A tab that gave up is announced as a lost connection instead.
+        let back: Vec<&String> = self
+            .reconnecting
+            .difference(&now)
+            .filter(|id| !self.attention.keys().any(|(_, a)| a == *id))
+            .collect();
+        for text in self.spoken_groups(&back, "reconnected", "reconnected") {
+            announce(text, ctx);
         }
         self.reconnecting = now;
-        ctx.emit(SwarmSessionsEvent::Changed);
+    }
+
+    /// One sentence per host for `ids`: "build on orb {one}" for a single
+    /// session, "3 sessions on orb {many}" for more.
+    fn spoken_groups(&self, ids: &[&String], one: &str, many: &str) -> Vec<String> {
+        let mut by_host: BTreeMap<Option<String>, Vec<&String>> = BTreeMap::new();
+        for id in ids {
+            let host = self.by_host.iter().find(|(_, list)| list.iter().any(|s| &&s.id == id)).and_then(|(h, _)| h.clone());
+            by_host.entry(host).or_default().push(id);
+        }
+        by_host
+            .into_iter()
+            .map(|(host, ids)| match ids.as_slice() {
+                [id] => format!("{} {one}", self.spoken_name(id)),
+                _ => format!("{} sessions on {} {many}", ids.len(), host.as_deref().unwrap_or("this Mac")),
+            })
+            .collect()
     }
 
     fn spoken_name(&self, id: &str) -> String {

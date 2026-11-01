@@ -142,6 +142,8 @@ pub enum WorkspaceAction {
     /// swarm-term: replace the ended daemon session behind this Warp session
     /// with a new one (same folder, name and group) in a new tab.
     SwarmRestartSession(u64),
+    /// swarm-term: compare this app with the latest published release.
+    SwarmCheckForUpdates,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1149,6 +1151,7 @@ impl WorkspaceAction {
             | SwarmNewSession { .. }
             | SwarmRetryConnections
             | SwarmRestartSession(_)
+            | SwarmCheckForUpdates
             | Reauth
             | SignupAnonymousUser
             | LogOut

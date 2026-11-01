@@ -6728,6 +6728,41 @@ impl Workspace {
         });
     }
 
+    /// Checks the release feed and says whether a newer Swarm is published,
+    /// offering to download it.
+    #[cfg(unix)]
+    fn check_for_swarm_updates(&mut self, ctx: &mut ViewContext<Self>) {
+        use crate::swarm::updates;
+        let Some(daemons) = warp_terminal::local_tty::daemon::daemons() else { return };
+        let rx = daemons.run(async { updates::check(updates::CURRENT).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, |me, result, ctx| match result {
+            Ok(Ok(Some(update))) => {
+                let url = update.url.clone();
+                let dialog = AlertDialogWithCallbacks::for_view(
+                    format!("Swarm {} is available", update.version),
+                    format!(
+                        "You have {}. Running sessions keep running while you update: quit Swarm, replace the app, and open it again (or run `brew upgrade --cask swarm`).",
+                        updates::CURRENT
+                    ),
+                    vec![
+                        ModalButton::for_view("Download", move |_: &mut Self, ctx| ctx.open_url(&url)),
+                        ModalButton::for_view("Not Now", |_, _| {}),
+                    ],
+                    |_, _| {},
+                )
+                .without_dont_ask_again();
+                ctx.show_native_platform_modal(dialog);
+            }
+            Ok(Ok(None)) => me.swarm_alert(
+                "Swarm is up to date",
+                format!("Swarm {} is the newest version published.", updates::CURRENT),
+                ctx,
+            ),
+            Ok(Err(e)) => me.swarm_alert("Couldn't check for updates", format!("{e:#}"), ctx),
+            Err(_) => {}
+        });
+    }
+
     /// Shows the session picker on this Mac (or hides it if it's showing).
     #[cfg(unix)]
     fn toggle_swarm_picker(&mut self, ctx: &mut ViewContext<Self>) {
@@ -26330,6 +26365,10 @@ impl TypedActionView for Workspace {
             SwarmRestartSession(warp_session_id) => self.restart_swarm_session(*warp_session_id, ctx),
             #[cfg(not(unix))]
             SwarmRestartSession(_) => {}
+            #[cfg(unix)]
+            SwarmCheckForUpdates => self.check_for_swarm_updates(ctx),
+            #[cfg(not(unix))]
+            SwarmCheckForUpdates => {}
             ShowHeaderToolbarContextMenu { position } => {
                 self.show_header_toolbar_context_menu(*position, ctx);
             }

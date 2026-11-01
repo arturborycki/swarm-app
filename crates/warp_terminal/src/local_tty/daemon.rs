@@ -553,6 +553,7 @@ fn to_size(size: &SizeInfo) -> Size {
 /// Ends the output times that replayed hooks carry (`OSC 1337 ; SwarmTime=`).
 const OUTPUT_TIME_NOW: &[u8] = b"\x1b]1337;SwarmTime=\x07";
 
+#[allow(clippy::too_many_arguments)]
 async fn run_bridge(
     daemons: &'static Daemons,
     host: Option<String>,

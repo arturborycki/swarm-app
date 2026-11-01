@@ -1198,6 +1198,12 @@ fn no_updates(_: &MenuItemProperties, _: &mut AppContext) -> MenuItemPropertyCha
 fn make_swarm_app_menu(ctx: &AppContext) -> Menu {
     let mut menu_items = vec![
         updateable_custom_item_without_checkmark(CustomAction::ShowAboutWarp, ctx),
+        MenuItem::Custom(CustomMenuItem::new(
+            "Check for Updates…",
+            |ctx| ctx.dispatch_global_action("root_view:swarm_show", &Some(WorkspaceAction::SwarmCheckForUpdates)),
+            no_updates,
+            None,
+        )),
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::ShowSettings, ctx),
         updateable_custom_item_without_checkmark(CustomAction::ConfigureKeybindings, ctx),

@@ -3561,7 +3561,7 @@ fn swarm_session_icon(terminal_view: &TerminalView, theme: &WarpTheme, app: &App
     #[cfg(unix)]
     {
         let (icon, icon_color) = swarm_session_status(terminal_view, app)?.mark.icon(theme);
-        return Some(IconWithStatusVariant::Neutral { icon, icon_color });
+        Some(IconWithStatusVariant::Neutral { icon, icon_color })
     }
     #[cfg(not(unix))]
     {

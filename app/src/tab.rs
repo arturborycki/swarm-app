@@ -1350,9 +1350,7 @@ impl<'a> TabComponent<'a> {
         {
             let terminal_view = tab.pane_group.as_ref(app).focused_session_view(app)?;
             let id = terminal_view.as_ref(app).active_block_session_id()?;
-            return crate::swarm::sessions::SwarmSessions::as_ref(app)
-                .status_for(id.as_u64())
-                .map(|status| status.mark);
+            crate::swarm::sessions::SwarmSessions::as_ref(app).status_for(id.as_u64()).map(|status| status.mark)
         }
         #[cfg(not(unix))]
         {

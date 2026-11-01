@@ -11,6 +11,7 @@ pub mod connect;
 pub mod picker;
 #[cfg(unix)]
 pub mod sessions;
+pub mod updates;
 #[cfg(unix)]
 pub mod widgets;
 
