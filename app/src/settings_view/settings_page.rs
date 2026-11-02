@@ -214,6 +214,26 @@ impl SettingsPage {
     }
 }
 
+impl SettingsPage {
+    /// swarm-term: the page's tab in the settings toolbar: a compact pill.
+    pub fn render_swarm_tab_button(&self, appearance: &Appearance, selected: bool) -> Hoverable {
+        appearance
+            .ui_builder()
+            .button(
+                if selected { ButtonVariant::Accent } else { ButtonVariant::Text },
+                self.button_state_handle.clone(),
+            )
+            .with_text_label(self.section.to_string())
+            .with_style(
+                UiComponentStyles::default()
+                    .set_border_width(0.)
+                    .set_font_size(12.)
+                    .set_padding(Coords::default().top(4.).bottom(4.).left(10.).right(10.)),
+            )
+            .build()
+    }
+}
+
 #[derive(PartialEq, Eq)]
 pub enum SettingsPageEvent {
     FocusModal,

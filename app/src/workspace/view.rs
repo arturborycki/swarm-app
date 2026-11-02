@@ -21661,9 +21661,12 @@ impl Workspace {
     fn render_swarm_window_title(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
         let theme = appearance.theme();
         let title = self
-            .tabs
-            .get(self.active_tab_index)
-            .map(|tab| tab.pane_group.as_ref(ctx).display_title(ctx))
+            .swarm_active_session_title(ctx)
+            .or_else(|| {
+                self.tabs
+                    .get(self.active_tab_index)
+                    .map(|tab| tab.pane_group.as_ref(ctx).display_title(ctx))
+            })
             .unwrap_or_default();
         Expanded::new(
             1.,
@@ -21676,6 +21679,34 @@ impl Workspace {
             .finish(),
         )
         .finish()
+    }
+
+    /// swarm-term: the window's title for the active daemon session, as in
+    /// the mockups: its name and folder ("api — ~/src/api"), unless its tab
+    /// was renamed.
+    fn swarm_active_session_title(&self, ctx: &AppContext) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let pane_group = self.active_tab_pane_group().as_ref(ctx);
+            if let Some(custom) = pane_group.custom_title(ctx) {
+                return Some(custom);
+            }
+            let session_id = pane_group
+                .terminal_view_from_pane_id(pane_group.focused_pane_id(ctx), ctx)?
+                .as_ref(ctx)
+                .active_block_session_id()?;
+            let status = crate::swarm::sessions::SwarmSessions::as_ref(ctx).status_for(session_id.as_u64())?;
+            let name = status.display_name();
+            Some(match status.cwd.as_deref() {
+                Some(cwd) if !cwd.is_empty() => format!("{name} — {cwd}"),
+                _ => name,
+            })
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = ctx;
+            None
+        }
     }
 
     /// swarm-term: the thin bar under the active session: "This Mac · zsh ·
@@ -21941,6 +21972,7 @@ impl Workspace {
     fn render_tab_bar_contents(
         &self,
         hover_fixed_width: Option<f32>,
+        swarm_strip: bool,
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
@@ -22045,7 +22077,8 @@ impl Workspace {
         let config = TabSettings::as_ref(ctx)
             .header_toolbar_chip_selection
             .clone();
-        if knowledge_center_closed {
+        // swarm-term: in the tab strip the sidebar toggle stays in the title row.
+        if knowledge_center_closed && !swarm_strip {
             let left_toolbar_buttons = config
                 .left_items()
                 .into_iter()
@@ -22273,7 +22306,9 @@ impl Workspace {
         // the freed flex is distributed accross the remaining flex items in the tab bar.
         tab_bar.add_child(Shrinkable::new(0.5, Empty::new().finish()).finish());
 
-        if crate::swarm::SWARM_CHROME {
+        if swarm_strip {
+            // The title row has Connect and the detached count.
+        } else if crate::swarm::SWARM_CHROME {
             #[cfg(unix)]
             self.add_swarm_title_bar_controls(&mut tab_bar, appearance, ctx);
         } else {
@@ -22286,7 +22321,7 @@ impl Workspace {
             );
         }
 
-        let left_padding = self.compute_tab_bar_left_padding(ctx);
+        let left_padding = if swarm_strip { SWARM_TAB_STRIP_PADDING } else { self.compute_tab_bar_left_padding(ctx) };
 
         EventHandler::new(
             Container::new(tab_bar.finish())
@@ -22510,6 +22545,28 @@ impl Workspace {
         }
     }
 
+    /// swarm-term: the title row over the tab strip: the sidebar toggle, the
+    /// window's title, and Connect with the detached count.
+    fn render_swarm_title_row(&self, appearance: &Appearance, ctx: &AppContext) -> Box<dyn Element> {
+        let mut row = Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center);
+        if let Some(toggle) = self.render_header_toolbar_button(&HeaderToolbarItemKind::TabsPanel, appearance, ctx) {
+            row.add_child(toggle);
+        }
+        row.add_child(self.render_swarm_window_title(appearance, ctx));
+        let mut controls = Flex::row()
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_main_axis_size(MainAxisSize::Min);
+        #[cfg(unix)]
+        self.add_swarm_title_bar_controls(&mut controls, appearance, ctx);
+        row.add_child(controls.finish());
+        Container::new(row.finish())
+            .with_padding_left(self.compute_tab_bar_left_padding(ctx))
+            .with_padding_right(TAB_BAR_PADDING_RIGHT)
+            .finish()
+    }
+
     fn compute_tab_bar_left_padding(&self, ctx: &AppContext) -> f32 {
         let zoom_factor = WindowSettings::as_ref(ctx).zoom_level.as_zoom_factor();
         let traffic_light_data = traffic_light_data(ctx, self.window_id);
@@ -22538,19 +22595,40 @@ impl Workspace {
         appearance: &Appearance,
         ctx: &AppContext,
     ) -> Box<dyn Element> {
-        let bar_contents = ConstrainedBox::new(
+        // swarm-term: with the sidebar hidden, tabs get a strip of their own
+        // under the title row, as in the tabs mockup.
+        let swarm_strip = crate::swarm::SWARM_CHROME
+            && !(FeatureFlag::VerticalTabs.is_enabled() && *TabSettings::as_ref(ctx).use_vertical_tabs);
+        let tabs = ConstrainedBox::new(
             // We can wrap the whole tab bar in the a drop target with the `AfterTabIndex` drop target data since the API for accepting a drop target with nested
             // drop target elements will default to the inner ones (in this case the tabs or the button before the tabs)
             DropTarget::new(
-                self.render_tab_bar_contents(tab_fixed_width, appearance, ctx),
+                self.render_tab_bar_contents(tab_fixed_width, swarm_strip, appearance, ctx),
                 TabBarDropTargetData {
                     tab_bar_location: TabBarLocation::AfterTabIndex(self.tabs.len()),
                 },
             )
             .finish(),
         )
-        .with_height(TAB_BAR_HEIGHT)
+        .with_height(if swarm_strip { SWARM_TAB_STRIP_HEIGHT } else { TAB_BAR_HEIGHT })
         .finish();
+        let bar_contents = if swarm_strip {
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_child(
+                    ConstrainedBox::new(self.render_swarm_title_row(appearance, ctx))
+                        .with_height(TAB_BAR_HEIGHT)
+                        .finish(),
+                )
+                .with_child(
+                    Container::new(tabs)
+                        .with_border(Border::top(1.).with_border_fill(appearance.theme().outline()))
+                        .finish(),
+                )
+                .finish()
+        } else {
+            tabs
+        };
 
         let tab_bar_border =
             Border::bottom(TAB_BAR_BORDER_HEIGHT).with_border_fill(appearance.theme().outline());
@@ -22575,7 +22653,7 @@ impl Workspace {
             WindowFocusDimming::apply_panel_header_dimming(
                 tab_bar_element,
                 self.mouse_states.header_dimming.clone(),
-                TAB_BAR_HEIGHT,
+                if swarm_strip { TAB_BAR_HEIGHT + 1. + SWARM_TAB_STRIP_HEIGHT } else { TAB_BAR_HEIGHT },
                 dimming_color,
                 self.window_id,
                 ctx,
@@ -30964,6 +31042,10 @@ fn swarm_tab_bar_host_label(name: &str, swatch: Fill, appearance: &Appearance) -
     .with_horizontal_padding(8.)
     .finish()
 }
+
+/// swarm-term: the tab strip under the title row while the sidebar is hidden.
+const SWARM_TAB_STRIP_HEIGHT: f32 = 48.;
+const SWARM_TAB_STRIP_PADDING: f32 = 10.;
 
 /// swarm-term: how far the terminal's panel sits from the window's edges
 /// beside a translucent sidebar, and its corners.

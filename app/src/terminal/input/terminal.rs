@@ -1,9 +1,10 @@
 use warp_core::settings::Setting;
 use warpui::elements::{
-    Border, Clipped, Container, DropTarget, Element, Flex, Hoverable, ParentElement, SavePosition,
-    Stack,
+    Border, Clipped, Container, CrossAxisAlignment, DropTarget, Element, Flex,
+    Hoverable, ParentElement, SavePosition, Shrinkable, Stack, Text,
 };
 use warpui::presenter::ChildView;
+use warpui::text_layout::ClipConfig;
 use warpui::{AppContext, SingletonEntity};
 
 use super::common::{
@@ -13,7 +14,7 @@ use super::common::{
 };
 use super::{Input, InputAction, InputDropTargetData};
 use crate::appearance::Appearance;
-use crate::context_chips::spacing;
+use crate::context_chips::{ContextChipKind, spacing};
 use crate::features::FeatureFlag;
 use crate::settings::{AppEditorSettings, InputModeSettings};
 use crate::terminal::block_list_settings::BlockListSettings;
@@ -22,6 +23,23 @@ use crate::terminal::settings::TerminalSettings;
 use crate::terminal::view::TerminalAction;
 
 impl Input {
+    /// Swarm's context line over the input: the folder, and the git branch
+    /// when there is one ("~/src/api · git:main"). `None` until the folder is known.
+    fn swarm_context_line(&self, app: &AppContext) -> Option<String> {
+        let prompt = self.prompt_type.as_ref(app);
+        let chip = |kind: &ContextChipKind| {
+            prompt
+                .latest_chip_value(kind, app)
+                .map(|value| value.to_string())
+                .filter(|value| !value.trim().is_empty())
+        };
+        let folder = chip(&ContextChipKind::WorkingDirectory)?;
+        Some(match chip(&ContextChipKind::ShellGitBranch) {
+            Some(branch) => format!("{folder}  ·  git:{branch}"),
+            None => folder,
+        })
+    }
+
     /// Renders the terminal mode input when `FeatureFlag::AgentView` is enabled and there is no
     /// active agent view.
     pub(super) fn render_terminal_input(&self, app: &AppContext) -> Box<dyn Element> {
@@ -51,16 +69,53 @@ impl Input {
             );
         }
 
-        let prompt_elements = self
-            .prompt_render_helper
-            .render_universal_developer_input_prompt(&model, appearance, app);
+        // Swarm: a plain context line (folder · git branch) over a `❯` prompt,
+        // as in the main window mockup, instead of Warp's context chips.
+        let swarm_context = (crate::swarm::SWARM_CHROME && model.block_list().is_bootstrapped())
+            .then(|| self.swarm_context_line(app))
+            .flatten();
+        let prompt_elements = match &swarm_context {
+            Some(context) => Container::new(
+                Text::new_inline(context.clone(), appearance.ui_font_family(), 11.)
+                    .with_color(crate::swarm::look::quiet_accent(appearance.theme()))
+                    .with_clip(ClipConfig::start())
+                    .finish(),
+            )
+            .with_padding_top(10.)
+            .finish(),
+            None => self
+                .prompt_render_helper
+                .render_universal_developer_input_prompt(&model, appearance, app),
+        };
 
         column.add_child(prompt_elements);
 
         let terminal_spacing = TerminalSettings::as_ref(app)
             .terminal_input_spacing(appearance.line_height_ratio(), app);
+        let input_box = self.render_input_box(show_vim_status, appearance, app);
+        let input_box = if swarm_context.is_some() {
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                .with_child(
+                    Container::new(
+                        Text::new_inline(
+                            "❯".to_string(),
+                            appearance.monospace_font_family(),
+                            appearance.monospace_font_size(),
+                        )
+                        .with_color(appearance.theme().accent().into())
+                        .finish(),
+                    )
+                    .with_margin_right(8.)
+                    .finish(),
+                )
+                .with_child(Shrinkable::new(1., input_box).finish())
+                .finish()
+        } else {
+            input_box
+        };
         column.add_child(
-            Container::new(self.render_input_box(show_vim_status, appearance, app))
+            Container::new(input_box)
                 .with_margin_top(
                     terminal_spacing.prompt_to_editor_padding
                         * spacing::UDI_PROMPT_BOTTOM_PADDING_FACTOR,

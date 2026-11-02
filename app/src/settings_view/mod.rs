@@ -2635,56 +2635,114 @@ impl View for SettingsView {
                 }
             }
         }
-        // Footer: "Open settings file" button, or an inline error alert if
-        // the workspace-level banner was dismissed. Rendered below the
-        // scrollable nav list but inside the same sidebar column so it
-        // shares the right-border and SIDEBAR_WIDTH constraint.
-        let footer_kind = SettingsFooterKind::choose(
-            FeatureFlag::SettingsFile.is_enabled(),
-            self.settings_file_error.is_some(),
-            self.settings_error_banner_dismissed,
-        );
-        let footer = render_footer(
-            footer_kind,
-            appearance,
-            self.settings_file_error.as_ref(),
-            AISettings::as_ref(app).is_any_ai_enabled(app),
-            &self.footer_mouse_states,
-        );
-
-        let scrollable = Container::new(
-            ClippedScrollable::vertical(
-                self.clipped_scroll_state.clone(),
-                buttons.finish(),
-                ScrollbarWidth::Auto,
-                theme.nonactive_ui_detail().into(),
-                theme.active_ui_detail().into(),
-                Fill::None,
+        let row = if crate::swarm::SWARM_CHROME {
+            // swarm-term: preferences laid out like a Mac settings window, as
+            // in the Settings mockup: section tabs along the top, the page in
+            // a centered column under them.
+            let mut tabs = Flex::row()
+                .with_main_axis_size(MainAxisSize::Min)
+                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                .with_spacing(2.);
+            for nav_item in &self.nav_items {
+                let SettingsNavItem::Page(section) = nav_item else {
+                    continue;
+                };
+                let section = *section;
+                if let Some((page, match_data)) = settings_pages.iter().find(|(p, _)| p.section == section) {
+                    if !match_data.is_truthy() {
+                        continue;
+                    }
+                    tabs.add_child(
+                        page.render_swarm_tab_button(appearance, section == self.current_settings_page)
+                            .on_click(move |ctx, _, _| {
+                                ctx.dispatch_typed_action(SettingsAction::SelectAndRefresh(section));
+                            })
+                            .finish(),
+                    );
+                }
+            }
+            let toolbar = Container::new(Align::new(tabs.finish()).finish())
+                .with_padding_top(6.)
+                .with_padding_bottom(6.)
+                .with_border(Border::bottom(SECTION_BORDER_WIDTH).with_border_fill(theme.outline()))
+                .finish();
+            let page = Align::new(
+                ConstrainedBox::new(
+                    Flex::column()
+                        .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                        .with_child(
+                            Container::new(self.render_search_editor(appearance))
+                                .with_padding_left(SWARM_SETTINGS_PAGE_INSET)
+                                .with_padding_right(SWARM_SETTINGS_PAGE_INSET)
+                                .with_padding_top(10.)
+                                .finish(),
+                        )
+                        .with_child(Expanded::new(1., page).finish())
+                        .finish(),
+                )
+                .with_max_width(SWARM_SETTINGS_PAGE_WIDTH)
+                .finish(),
             )
-            .finish(),
-        )
-        .with_padding_top(HEADER_PADDING)
-        .finish();
-
-        let sidebar = ConstrainedBox::new(
-            Container::new(
-                Flex::column()
-                    .with_child(Expanded::new(1., scrollable).finish())
-                    .with_child(footer)
-                    .finish(),
-            )
-            .with_border(Border::right(SECTION_BORDER_WIDTH).with_border_fill(theme.outline()))
-            .finish(),
-        )
-        .with_width(sidebar_width())
-        .finish();
-
-        let row = Flex::row()
-            .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_child(Shrinkable::new(1., sidebar).finish())
-            .with_child(Shrinkable::new(1., page).finish())
+            .top_center()
             .finish();
+            Flex::column()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(toolbar)
+                .with_child(Expanded::new(1., page).finish())
+                .finish()
+        } else {
+            // Footer: "Open settings file" button, or an inline error alert if
+            // the workspace-level banner was dismissed. Rendered below the
+            // scrollable nav list but inside the same sidebar column so it
+            // shares the right-border and SIDEBAR_WIDTH constraint.
+            let footer_kind = SettingsFooterKind::choose(
+                FeatureFlag::SettingsFile.is_enabled(),
+                self.settings_file_error.is_some(),
+                self.settings_error_banner_dismissed,
+            );
+            let footer = render_footer(
+                footer_kind,
+                appearance,
+                self.settings_file_error.as_ref(),
+                AISettings::as_ref(app).is_any_ai_enabled(app),
+                &self.footer_mouse_states,
+            );
+
+            let scrollable = Container::new(
+                ClippedScrollable::vertical(
+                    self.clipped_scroll_state.clone(),
+                    buttons.finish(),
+                    ScrollbarWidth::Auto,
+                    theme.nonactive_ui_detail().into(),
+                    theme.active_ui_detail().into(),
+                    Fill::None,
+                )
+                .finish(),
+            )
+            .with_padding_top(HEADER_PADDING)
+            .finish();
+
+            let sidebar = ConstrainedBox::new(
+                Container::new(
+                    Flex::column()
+                        .with_child(Expanded::new(1., scrollable).finish())
+                        .with_child(footer)
+                        .finish(),
+                )
+                .with_border(Border::right(SECTION_BORDER_WIDTH).with_border_fill(theme.outline()))
+                .finish(),
+            )
+            .with_width(sidebar_width())
+            .finish();
+
+            Flex::row()
+                .with_cross_axis_alignment(CrossAxisAlignment::Stretch)
+                .with_main_axis_size(MainAxisSize::Max)
+                .with_child(Shrinkable::new(1., sidebar).finish())
+                .with_child(Shrinkable::new(1., page).finish())
+                .finish()
+        };
 
         let mut stack = Stack::new().with_child(
             EventHandler::new(
@@ -2754,6 +2812,11 @@ impl View for SettingsView {
         SavePosition::new(stack.finish(), POSITION_ID).finish()
     }
 }
+
+/// swarm-term: the width of the settings page's column, and how far its
+/// search field is inset to line up with the page's own padding.
+const SWARM_SETTINGS_PAGE_WIDTH: f32 = 780.;
+const SWARM_SETTINGS_PAGE_INSET: f32 = 24.;
 
 impl TypedActionView for SettingsView {
     type Action = SettingsAction;

@@ -285,7 +285,9 @@ impl TerminalView {
 
         let appearance = Appearance::as_ref(app);
         let pane_config = self.pane_configuration.as_ref(app);
-        let title = pane_config.title().to_owned();
+        // swarm-term: a daemon session's pane is titled like its sidebar row,
+        // with its host: "api · This Mac".
+        let title = self.swarm_pane_title(app).unwrap_or_else(|| pane_config.title().to_owned());
         let clip_config = if self.is_using_conversation_for_pane_header_title {
             ClipConfig::ellipsis()
         } else {
@@ -733,9 +735,10 @@ impl BackingView for TerminalView {
             .is_sharer_or_viewer();
         let is_fullscreen_agent_view = FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(app).is_fullscreen();
+        // swarm-term: split panes are titled, so each says which session it is.
         is_shared
             || is_fullscreen_agent_view
-            || FeatureFlag::ContextWindowUsageV2.is_enabled()
+            || (crate::swarm::SWARM_CHROME || FeatureFlag::ContextWindowUsageV2.is_enabled())
                 && self.split_pane_state(app).is_in_split_pane()
     }
 
@@ -768,6 +771,22 @@ impl BackingView for TerminalView {
 }
 
 impl TerminalView {
+    /// swarm-term: the pane header's title for a daemon session.
+    fn swarm_pane_title(&self, app: &AppContext) -> Option<String> {
+        #[cfg(unix)]
+        {
+            let id = self.active_block_session_id()?;
+            let status = crate::swarm::sessions::SwarmSessions::as_ref(app).status_for(id.as_u64())?;
+            let host = status.host.clone().unwrap_or_else(|| "This Mac".to_string());
+            Some(format!("{} · {host}", status.display_name()))
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = app;
+            None
+        }
+    }
+
     /// Render the cancel button for cancelling the ambient agent task while it's loading.
     fn render_ambient_agent_cancel_button(&self, app: &AppContext) -> Box<dyn Element> {
         let appearance = Appearance::as_ref(app);

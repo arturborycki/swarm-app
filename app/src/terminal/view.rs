@@ -25066,28 +25066,66 @@ impl TerminalView {
             .theme()
             .sub_text_color(appearance.theme().background())
             .into();
-
-        let prompt = Text::new_inline(
-            Self::block_prompt(model, sessions, index),
-            appearance.monospace_font_family(),
-            appearance.monospace_font_size() * WARP_PROMPT_HEIGHT_LINES,
-        )
-        .with_style(Properties::default().weight(appearance.monospace_font_weight()))
-        .with_color(terminal_theme_prompt)
-        .finish();
-
-        let mut label_row = Flex::row().with_child(prompt);
-
-        let is_live = Self::is_block_duration_live(model, index);
-        if let Some(duration_string) = Self::block_duration_text(model, index) {
-            let duration = Text::new_inline(
-                duration_string,
+        // swarm-term: the card's header line is small UI text, the folder in
+        // the quieted accent on the left and the duration on the right.
+        let swarm = crate::swarm::SWARM_CHROME;
+        let (label_font, label_size) = if swarm {
+            (appearance.ui_font_family(), 11.)
+        } else {
+            (
                 appearance.monospace_font_family(),
                 appearance.monospace_font_size() * WARP_PROMPT_HEIGHT_LINES,
             )
-            .with_style(Properties::default().weight(appearance.monospace_font_weight()))
-            .with_color(terminal_theme_prompt)
-            .finish();
+        };
+        let label_weight = if swarm { warpui::fonts::Weight::Normal } else { appearance.monospace_font_weight() };
+        let prompt_color = if swarm { crate::swarm::look::quiet_accent(appearance.theme()) } else { terminal_theme_prompt };
+
+        let prompt = Text::new_inline(
+            Self::block_prompt(model, sessions, index),
+            label_font,
+            label_size,
+        )
+        .with_style(Properties::default().weight(label_weight))
+        .with_color(prompt_color)
+        .finish();
+
+        let mut label_row = Flex::row().with_child(prompt);
+        if swarm {
+            label_row = label_row
+                .with_main_axis_size(warpui::elements::MainAxisSize::Max)
+                .with_main_axis_alignment(warpui::elements::MainAxisAlignment::SpaceBetween);
+        }
+        let failed_code = model
+            .block_list()
+            .block_at(index)
+            .filter(|block| swarm && block.has_failed())
+            .map(|block| block.exit_code().value());
+
+        let is_live = Self::is_block_duration_live(model, index);
+        // A failed block whose duration isn't known (one restored from an
+        // earlier run) still shows its exit code.
+        let duration_text = Self::block_duration_text(model, index)
+            .or_else(|| failed_code.map(|_| String::new()));
+        if let Some(duration_string) = duration_text {
+            let duration_string = if swarm {
+                let duration = duration_string.trim().trim_start_matches('(').trim_end_matches(')').to_string();
+                match failed_code {
+                    Some(code) if duration.is_empty() => format!("exit {code}"),
+                    Some(code) => format!("exit {code} · {duration}"),
+                    None => duration,
+                }
+            } else {
+                duration_string
+            };
+            let duration_color = match failed_code {
+                Some(_) => appearance.theme().failed_block_color().into(),
+                None => terminal_theme_prompt,
+            };
+            let duration_weight = if failed_code.is_some() { warpui::fonts::Weight::Semibold } else { label_weight };
+            let duration = Text::new_inline(duration_string, label_font, label_size)
+                .with_style(Properties::default().weight(duration_weight))
+                .with_color(duration_color)
+                .finish();
 
             // Wrap in LiveElement to trigger periodic repaints while the command
             // is still running, so the counter updates live.

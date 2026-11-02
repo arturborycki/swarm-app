@@ -53,3 +53,12 @@ fn system_accent() -> Option<warpui::color::ColorU> {
 fn system_accent() -> Option<warpui::color::ColorU> {
     None
 }
+
+/// The accent halfway to secondary text: Swarm's quiet blue-gray for
+/// folders over blocks and the input, as in the mockups.
+pub fn quiet_accent(theme: &WarpTheme) -> warpui::color::ColorU {
+    let accent: warpui::color::ColorU = theme.accent().into();
+    let sub: warpui::color::ColorU = theme.sub_text_color(theme.background()).into();
+    let mix = |a: u8, b: u8| ((a as u16 + b as u16) / 2) as u8;
+    warpui::color::ColorU::new(mix(accent.r, sub.r), mix(accent.g, sub.g), mix(accent.b, sub.b), 255)
+}
