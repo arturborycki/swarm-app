@@ -706,6 +706,14 @@ fn test_validate_custom_uri_linear() {
 }
 
 #[test]
+fn test_validate_custom_uri_swarm_scheme() {
+    let url = Url::parse("swarm://launch/demo.yaml").unwrap();
+    let host = validate_custom_uri(&url).unwrap();
+    assert!(matches!(host, UriHost::Launch));
+    assert!(validate_custom_uri(&Url::parse("other://launch/demo.yaml").unwrap()).is_err());
+}
+
+#[test]
 fn test_linear_action_parse_work() {
     let url = Url::parse(&format!(
         "{}://linear/work?prompt=hello",

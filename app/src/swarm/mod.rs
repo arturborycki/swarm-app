@@ -23,6 +23,17 @@ pub const SWARM_CHROME: bool = true;
 /// tests, which still cover those features.
 pub const HIDE_WARP_SERVICES: bool = SWARM_CHROME && !cfg!(test);
 
+/// Swarm's own URL scheme (`swarm://launch/<config>.yaml`, ...), declared in
+/// the bundle's Info.plist. Incoming URLs may also use the channel's scheme
+/// (`warposs`), which the NSServices provider still builds.
+pub const URL_SCHEME: &str = "swarm";
+
+/// Whether `scheme` is one this app handles: Swarm's own or the channel's.
+pub fn is_app_url_scheme(scheme: &str) -> bool {
+    (SWARM_CHROME && scheme == URL_SCHEME)
+        || scheme == warp_core::channel::ChannelState::url_scheme()
+}
+
 /// The product name shown in menus and titles.
 pub const APP_NAME: &str = "Swarm";
 

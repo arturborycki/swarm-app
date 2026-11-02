@@ -55,7 +55,7 @@ use crate::workspace::{
     active_terminal_in_window,
 };
 use crate::{
-    ChannelState, OpenPath, quake_mode_window_id, quake_mode_window_is_open, safe_info,
+    OpenPath, quake_mode_window_id, quake_mode_window_is_open, safe_info,
     send_telemetry_from_app_ctx,
 };
 
@@ -1708,7 +1708,7 @@ fn settings_section_for_simple_subpage(subpage: &str) -> Option<SettingsSection>
 fn validate_custom_uri(url: &Url) -> Result<UriHost> {
     // For now the only scheme we support is `[scheme_name]://[host_str]/...
     // Ignore all other urls that don't match this scheme for security purposes.
-    if url.scheme() != ChannelState::url_scheme() {
+    if !crate::swarm::is_app_url_scheme(url.scheme()) {
         return Err(anyhow!(
             "Received url with unexpected scheme: {} ",
             url.scheme()

@@ -1059,6 +1059,7 @@ resources = ["assets/onboarding"]
 icon = ["channels/swarm/icon/512x512.png", "channels/swarm/icon/512x512@2x.png"]
 short_description = "A terminal whose sessions keep running: local and remote, always reattachable."
 osx_minimum_system_version = "13.0"
+osx_url_schemes = ["swarm"]
 
 [package.metadata.bundle.bin.warp-oss]
 category = "public.app-category.developer-tools"

@@ -3153,7 +3153,7 @@ fn on_close_window_cancelled(
 }
 
 fn is_cloud_agent_web_home_launch_url(url: &Url) -> bool {
-    url.scheme() == ChannelState::url_scheme()
+    crate::swarm::is_app_url_scheme(url.scheme())
         && url.host_str() == Some("action")
         && url.path() == "/new_cloud_agent_conversation"
         && url
