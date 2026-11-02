@@ -3963,16 +3963,18 @@ fn render_swarm_session_row(
         .with_child(Container::new(side.finish()).with_margin_left(8.).finish())
         .finish();
 
-    // Rows aren't tinted with their group's color: the mark and the bar
-    // already say which host a session is on.
-    props.pane_color = None;
-    let host_bar = crate::swarm::host_fill(theme, status.host.as_deref());
+    // A color picked for the session tints its row and its bar, as it tints
+    // its tab. The host's own color doesn't: the mark and the bar already say
+    // which host a session is on.
+    let host_fill = crate::swarm::host_fill(theme, status.host.as_deref());
+    props.pane_color = props.pane_color.filter(|&color| color != host_fill);
+    let bar = props.pane_color.unwrap_or(host_fill);
     render_pane_row_element(
         props,
         Padding::uniform(7.).with_left(8.).with_right(8.),
         true,
         content,
-        Some(host_bar),
+        Some(bar),
         theme,
     )
 }
