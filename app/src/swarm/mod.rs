@@ -7,6 +7,8 @@
 
 #[cfg(unix)]
 pub mod connect;
+#[cfg(target_os = "macos")]
+pub mod install;
 pub mod look;
 #[cfg(unix)]
 pub mod picker;

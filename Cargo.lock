@@ -15459,6 +15459,7 @@ dependencies = [
  "remote_server",
  "repo_metadata",
  "reqwest",
+ "ring",
  "rmcp",
  "rust-embed 8.7.2",
  "rustc-hash 2.1.1",

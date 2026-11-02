@@ -2,8 +2,9 @@
 //! read from swarm-term.com's feed (`/releases/latest.json`, in the shape of
 //! GitHub's "latest release" API: a `v<version>` tag and a `Swarm-<version>.dmg`
 //! asset). The site serves it so the check works while the GitHub repository is
-//! private. It only reads the release; downloading and installing are left to
-//! the user (the DMG) or Homebrew (`brew upgrade --cask swarm`).
+//! private. A release whose DMG the feed signs (`sha256` and `signature` on the
+//! asset, from scripts/sign-update.sh) can be installed in place
+//! (`swarm::install`); others are left to the user (the DMG) or Homebrew.
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
@@ -21,6 +22,22 @@ pub struct Update {
     pub version: String,
     /// The DMG if the release has one, else the release page.
     pub url: String,
+    /// What the app needs to install the DMG itself; `None` if the feed doesn't sign it.
+    pub signed: Option<Signed>,
+}
+
+/// A DMG's SHA-256 (hex) and the release key's Ed25519 signature (base64) over
+/// [`signed_message`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Signed {
+    pub sha256: String,
+    pub signature: String,
+}
+
+/// What the release key signs for `version`'s DMG, so a signature can't be
+/// reused for another file or another version.
+pub fn signed_message(version: &str, sha256: &str) -> String {
+    format!("swarm-update:{version}:{sha256}")
 }
 
 #[derive(Deserialize)]
@@ -39,6 +56,22 @@ struct Release {
 struct Asset {
     name: String,
     browser_download_url: String,
+    #[serde(default)]
+    sha256: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
+}
+
+/// Whether `version` hasn't been offered yet in this run (and is now), so a
+/// quiet check offers each update once rather than every day.
+pub fn claim_offer(version: &str) -> bool {
+    static OFFERED: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    let mut offered = OFFERED.lock().unwrap_or_else(|e| e.into_inner());
+    if offered.as_deref() == Some(version) {
+        return false;
+    }
+    *offered = Some(version.to_string());
+    true
 }
 
 /// The feed URL: `SWARM_UPDATE_FEED` (a GitHub "latest release" API URL, or
@@ -82,13 +115,14 @@ fn newer_release(body: &str, current: &str) -> Result<Option<Update>> {
         return Ok(None);
     }
     let dmg = format!("Swarm-{version}.dmg");
-    let url = release
-        .assets
-        .into_iter()
-        .find(|a| a.name == dmg)
-        .map(|a| a.browser_download_url)
-        .unwrap_or(release.html_url);
-    Ok(Some(Update { version, url }))
+    let Some(asset) = release.assets.into_iter().find(|a| a.name == dmg) else {
+        return Ok(Some(Update { version, url: release.html_url, signed: None }));
+    };
+    let signed = match (asset.sha256, asset.signature) {
+        (Some(sha256), Some(signature)) => Some(Signed { sha256: sha256.to_ascii_lowercase(), signature }),
+        _ => None,
+    };
+    Ok(Some(Update { version, url: asset.browser_download_url, signed }))
 }
 
 #[cfg(test)]
@@ -107,8 +141,19 @@ mod tests {
         );
         assert_eq!(
             newer_release(&body, "0.1.0").unwrap(),
-            Some(Update { version: "0.2.0".into(), url: "https://example.com/Swarm-0.2.0.dmg".into() })
+            Some(Update { version: "0.2.0".into(), url: "https://example.com/Swarm-0.2.0.dmg".into(), signed: None })
         );
+    }
+
+    #[test]
+    fn signed_dmg_carries_its_hash_and_signature() {
+        let body = release(
+            "v0.2.0",
+            r#"{"name": "Swarm-0.2.0.dmg", "browser_download_url": "u", "sha256": "ABC1", "signature": "c2ln"}"#,
+        );
+        let update = newer_release(&body, "0.1.0").unwrap().unwrap();
+        assert_eq!(update.signed, Some(Signed { sha256: "abc1".into(), signature: "c2ln".into() }));
+        assert_eq!(signed_message(&update.version, "abc1"), "swarm-update:0.2.0:abc1");
     }
 
     #[test]

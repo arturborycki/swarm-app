@@ -4127,6 +4127,9 @@ impl Workspace {
             && crate::swarm::claim_remote_tab_reopen()
         {
             self.reopen_remote_tabs(ctx);
+            #[cfg(target_os = "macos")]
+            std::thread::spawn(crate::swarm::install::remove_leftovers);
+            self.schedule_swarm_update_check(std::time::Duration::from_secs(10), ctx);
             if crate::swarm::claim_first_run() {
                 // Once the window is up.
                 let _ = ctx.spawn(
@@ -6729,39 +6732,117 @@ impl Workspace {
     }
 
     /// Checks the release feed and says whether a newer Swarm is published,
-    /// offering to download it.
+    /// offering to install or download it. A `quiet` check (at launch, then
+    /// daily) says nothing unless there's a version it hasn't offered yet.
     #[cfg(unix)]
-    fn check_for_swarm_updates(&mut self, ctx: &mut ViewContext<Self>) {
+    fn check_for_swarm_updates(&mut self, quiet: bool, ctx: &mut ViewContext<Self>) {
         use crate::swarm::updates;
         let Some(daemons) = warp_terminal::local_tty::daemon::daemons() else { return };
         let rx = daemons.run(async { updates::check(updates::CURRENT).await });
-        let _ = ctx.spawn(async move { rx.recv().await }, |me, result, ctx| match result {
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
             Ok(Ok(Some(update))) => {
-                let url = update.url.clone();
-                let dialog = AlertDialogWithCallbacks::for_view(
-                    format!("Swarm {} is available", update.version),
-                    format!(
-                        "You have {}. Running sessions keep running while you update: quit Swarm, replace the app, and open it again (or run `brew upgrade --cask swarm`).",
-                        updates::CURRENT
-                    ),
-                    vec![
-                        ModalButton::for_view("Download", move |_: &mut Self, ctx| ctx.open_url(&url)),
-                        ModalButton::for_view("Not Now", |_, _| {}),
-                    ],
-                    |_, _| {},
-                )
-                .without_dont_ask_again();
-                ctx.show_native_platform_modal(dialog);
+                if quiet && !updates::claim_offer(&update.version) {
+                    return;
+                }
+                me.offer_swarm_update(update, ctx);
             }
-            Ok(Ok(None)) => me.swarm_alert(
+            Ok(Ok(None)) if !quiet => me.swarm_alert(
                 "Swarm is up to date",
                 format!("Swarm {} is the newest version published.", updates::CURRENT),
                 ctx,
             ),
-            Ok(Err(e)) => me.swarm_alert("Couldn't check for updates", format!("{e:#}"), ctx),
-            Err(_) => {}
+            Ok(Err(e)) if !quiet => me.swarm_alert("Couldn't check for updates", format!("{e:#}"), ctx),
+            _ => {}
         });
     }
+
+    /// Checks for updates shortly after launch, then once a day.
+    #[cfg(unix)]
+    fn schedule_swarm_update_check(&mut self, delay: std::time::Duration, ctx: &mut ViewContext<Self>) {
+        const DAILY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+        let _ = ctx.spawn(async move { warpui::r#async::Timer::after(delay).await }, |me, _, ctx| {
+            me.check_for_swarm_updates(true, ctx);
+            me.schedule_swarm_update_check(DAILY, ctx);
+        });
+    }
+
+    #[cfg(unix)]
+    fn offer_swarm_update(&mut self, update: crate::swarm::updates::Update, ctx: &mut ViewContext<Self>) {
+        use crate::swarm::updates;
+        #[cfg(target_os = "macos")]
+        let installable = match (&update.signed, crate::swarm::install::installed_bundle()) {
+            (Some(_), Ok(_)) => Ok(()),
+            (None, _) => Err("This release can't be installed from inside Swarm.".to_string()),
+            (Some(_), Err(e)) => Err(format!("Swarm can't install it itself: {e:#}")),
+        };
+        #[cfg(not(target_os = "macos"))]
+        let installable: Result<(), String> = Err(String::new());
+        let title = format!("Swarm {} is available", update.version);
+        let url = update.url.clone();
+        let download = ModalButton::for_view("Download", move |_: &mut Self, ctx| ctx.open_url(&url));
+        let not_now = ModalButton::for_view("Not Now", |_, _| {});
+        let (text, buttons) = match installable {
+            Ok(()) => (
+                format!(
+                    "You have {}. Swarm restarts to finish installing; your sessions keep running.",
+                    updates::CURRENT
+                ),
+                vec![
+                    ModalButton::for_view("Install and Restart", move |me: &mut Self, ctx| {
+                        me.install_swarm_update(update.clone(), ctx)
+                    }),
+                    not_now,
+                ],
+            ),
+            Err(why) => (
+                format!(
+                    "You have {}. {why} To update, quit Swarm, replace the app with the one in the download, and open it again; your sessions keep running.",
+                    updates::CURRENT
+                ),
+                vec![download, not_now],
+            ),
+        };
+        let dialog = AlertDialogWithCallbacks::for_view(title, text, buttons, |_, _| {}).without_dont_ask_again();
+        ctx.show_native_platform_modal(dialog);
+    }
+
+    /// Downloads, checks and installs `update`, then quits so the new version
+    /// starts; says why if it can't.
+    #[cfg(target_os = "macos")]
+    fn install_swarm_update(&mut self, update: crate::swarm::updates::Update, ctx: &mut ViewContext<Self>) {
+        use crate::swarm::install;
+        let Some(daemons) = warp_terminal::local_tty::daemon::daemons() else { return };
+        self.swarm_alert(
+            format!("Downloading Swarm {}", update.version),
+            "Swarm restarts by itself once the update is installed. You can keep working meanwhile.",
+            ctx,
+        );
+        let version = update.version.clone();
+        let url = update.url.clone();
+        let rx = daemons.run(async move { install::download(&update).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |_, result, ctx| {
+            let Ok(staged) = result else { return };
+            match staged.and_then(install::install) {
+                Ok(()) => ctx.terminate_app(TerminationMode::Cancellable, None),
+                Err(e) => {
+                    let dialog = AlertDialogWithCallbacks::for_view(
+                        format!("Couldn't install Swarm {version}"),
+                        format!("{e:#}\n\nYou can download it and install it yourself instead."),
+                        vec![
+                            ModalButton::for_view("Download", move |_: &mut Self, ctx| ctx.open_url(&url)),
+                            ModalButton::for_view("Not Now", |_, _| {}),
+                        ],
+                        |_, _| {},
+                    )
+                    .without_dont_ask_again();
+                    ctx.show_native_platform_modal(dialog);
+                }
+            }
+        });
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    fn install_swarm_update(&mut self, _: crate::swarm::updates::Update, _: &mut ViewContext<Self>) {}
 
     /// Shows the session picker on this Mac (or hides it if it's showing).
     #[cfg(unix)]
@@ -26470,7 +26551,7 @@ impl TypedActionView for Workspace {
             #[cfg(not(unix))]
             SwarmRestartSession(_) => {}
             #[cfg(unix)]
-            SwarmCheckForUpdates => self.check_for_swarm_updates(ctx),
+            SwarmCheckForUpdates => self.check_for_swarm_updates(false, ctx),
             #[cfg(not(unix))]
             SwarmCheckForUpdates => {}
             ShowHeaderToolbarContextMenu { position } => {
