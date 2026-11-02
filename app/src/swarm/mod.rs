@@ -258,6 +258,26 @@ pub fn ago(ms: u64) -> String {
     }
 }
 
+/// A remote `path` with the usual home folders (`/home/<user>`,
+/// `/Users/<user>`, `/root`) shown as `~`. The remote user's actual home
+/// isn't known here, so other layouts stay as they are.
+pub fn remote_home_relative(path: &str) -> String {
+    let rest = if let Some(rest) = path.strip_prefix("/root") {
+        Some(rest)
+    } else {
+        ["/home/", "/Users/"].iter().find_map(|base| {
+            let after = path.strip_prefix(base)?;
+            let user_end = after.find('/').unwrap_or(after.len());
+            (user_end > 0).then(|| &after[user_end..])
+        })
+    };
+    match rest {
+        Some("") | Some("/") => "~".to_string(),
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
+    }
+}
+
 /// `path` with this Mac's home folder shown as `~`.
 pub fn home_relative(path: &str) -> String {
     match dirs::home_dir().and_then(|home| std::path::Path::new(path).strip_prefix(home).ok().map(|r| r.display().to_string())) {
@@ -307,4 +327,20 @@ pub fn reattach_terminal_options(tab: &ReattachTab) -> crate::pane_group::NewTer
         }
     }
     options
+}
+
+#[cfg(test)]
+mod tests {
+    use super::remote_home_relative;
+
+    #[test]
+    fn remote_home_folders_read_as_tilde() {
+        assert_eq!(remote_home_relative("/home/naotar"), "~");
+        assert_eq!(remote_home_relative("/home/naotar/src/api"), "~/src/api");
+        assert_eq!(remote_home_relative("/Users/ana/"), "~");
+        assert_eq!(remote_home_relative("/root/ml"), "~/ml");
+        assert_eq!(remote_home_relative("/rootfs"), "/rootfs");
+        assert_eq!(remote_home_relative("/home/"), "/home/");
+        assert_eq!(remote_home_relative("/srv/web"), "/srv/web");
+    }
 }

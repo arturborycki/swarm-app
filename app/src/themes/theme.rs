@@ -50,6 +50,8 @@ pub enum ThemeKind {
     #[schemars(description = "Phenomenon")]
     Phenomenon,
     #[default]
+    #[schemars(description = "Swarm")]
+    Swarm,
     #[schemars(description = "Dark")]
     Dark,
     #[schemars(description = "Dracula")]
@@ -111,6 +113,7 @@ impl std::fmt::Display for ThemeKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let value = match &self {
             ThemeKind::Light => "Light",
+            ThemeKind::Swarm => "Swarm",
             ThemeKind::Dark => "Dark",
             ThemeKind::Dracula => "Dracula",
             ThemeKind::SolarizedDark => "Solarized Dark",
@@ -471,6 +474,7 @@ impl WarpThemeConfig {
                 ThemeKind::ReceivedReferralReward,
                 received_referral_reward(),
             ),
+            (ThemeKind::Swarm, swarm_theme()),
             (ThemeKind::Dark, dark_theme()),
             (ThemeKind::Light, light_theme()),
             (ThemeKind::SolarizedDark, solarized_dark()),
@@ -557,7 +561,7 @@ impl Default for SelectedSystemThemes {
     fn default() -> Self {
         Self {
             light: ThemeKind::Light,
-            dark: ThemeKind::Dark,
+            dark: ThemeKind::Swarm,
         }
     }
 }

@@ -78,9 +78,43 @@ pub struct SessionStatus {
     pub others: Vec<String>,
     /// It printed something since its tab was last shown.
     pub unseen: bool,
+    /// The name the user gave it.
+    pub name: Option<String>,
+    /// When it last printed, was typed into, or exited (ms since the epoch).
+    pub last_activity_ms: u64,
+    /// How it ended ("exit 101", "killed by signal 9"), once it has.
+    pub ended: Option<String>,
 }
 
 impl SessionStatus {
+    /// What the session is called in tabs and the sidebar: the name it was
+    /// given, else its folder's name ("api" for ~/src/api), else its shell.
+    pub fn display_name(&self) -> String {
+        if let Some(name) = self.name.as_deref().filter(|name| !name.is_empty()) {
+            return name.to_string();
+        }
+        let folder = self.cwd.as_deref().and_then(|cwd| match cwd.trim_end_matches('/') {
+            "" | "~" => None,
+            cwd => cwd.rsplit('/').next().map(str::to_string),
+        });
+        folder
+            .or_else(|| self.shell.clone())
+            .unwrap_or_else(|| "session".to_string())
+    }
+
+    /// The line under the name: what it runs, how it ended (after
+    /// `last_command`, when known), or where it is.
+    pub fn detail(&self, last_command: Option<String>) -> String {
+        match (&self.ended, &self.command) {
+            (Some(ended), _) => match last_command {
+                Some(command) => format!("{command} · {ended}"),
+                None => ended.clone(),
+            },
+            (None, Some(command)) => command.clone(),
+            (None, None) => self.cwd.clone().unwrap_or_default(),
+        }
+    }
+
     /// The status in words, for VoiceOver: "devbox, running psql, also open elsewhere".
     pub fn spoken(&self) -> String {
         let mut text = self.host.clone().unwrap_or_else(|| "This Mac".to_string());
@@ -327,7 +361,10 @@ impl SwarmSessions {
         if let Some(i) = others.iter().position(|n| *n == me) {
             others.remove(i);
         }
-        let cwd = session.cwd.clone().map(|cwd| if host.is_none() { super::home_relative(&cwd) } else { cwd });
+        let cwd = session.cwd.clone().map(|cwd| match host {
+            None => super::home_relative(&cwd),
+            Some(_) => super::remote_home_relative(&cwd),
+        });
         let shell = session.command.first().map(|program| {
             let name = program.rsplit('/').next().unwrap_or(program);
             name.trim_start_matches('-').to_string()
@@ -342,6 +379,9 @@ impl SwarmSessions {
             size: (session.size.cols, session.size.rows),
             others,
             unseen: daemon::has_unseen_output(&session.id),
+            name: session.name.clone(),
+            last_activity_ms: last_activity_ms(session),
+            ended: ended_label(session),
         })
     }
 
@@ -397,6 +437,27 @@ impl SwarmSessions {
     }
 }
 
+/// When `session` last printed, was typed into, or exited.
+fn last_activity_ms(session: &DaemonSession) -> u64 {
+    let ended = match session.state {
+        daemon::SessionState::Exited { at_ms, .. } => at_ms,
+        _ => 0,
+    };
+    session.last_output_ms.max(session.last_input_ms).max(ended).max(session.created_ms)
+}
+
+/// How `session` ended, in a few words; `None` while it runs.
+fn ended_label(session: &DaemonSession) -> Option<String> {
+    match session.state {
+        daemon::SessionState::Exited { code: Some(code), .. } => Some(format!("exit {code}")),
+        daemon::SessionState::Exited { signal: Some(signal), .. } => {
+            Some(format!("killed by signal {signal}"))
+        }
+        daemon::SessionState::Exited { .. } => Some("ended".to_string()),
+        _ => None,
+    }
+}
+
 impl Entity for SwarmSessions {
     type Event = SwarmSessionsEvent;
 }
@@ -406,4 +467,45 @@ impl SingletonEntity for SwarmSessions {}
 /// Has VoiceOver read `text` out (a no-op when no screen reader is running).
 fn announce(text: String, ctx: &mut ModelContext<SwarmSessions>) {
     ctx.emit_a11y_content(AccessibilityContent::new_without_help(text, WarpA11yRole::UserAction));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionMark, SessionStatus};
+
+    fn status(name: Option<&str>, cwd: Option<&str>) -> SessionStatus {
+        SessionStatus {
+            mark: SessionMark::Idle,
+            elsewhere: false,
+            host: None,
+            command: None,
+            shell: Some("zsh".to_string()),
+            cwd: cwd.map(str::to_string),
+            size: (80, 24),
+            others: Vec::new(),
+            unseen: false,
+            name: name.map(str::to_string),
+            last_activity_ms: 0,
+            ended: None,
+        }
+    }
+
+    #[test]
+    fn display_name_prefers_name_then_folder_then_shell() {
+        assert_eq!(status(Some("logs"), Some("~/src/api")).display_name(), "logs");
+        assert_eq!(status(None, Some("~/src/api")).display_name(), "api");
+        assert_eq!(status(None, Some("~")).display_name(), "zsh");
+        assert_eq!(status(Some(""), None).display_name(), "zsh");
+    }
+
+    #[test]
+    fn detail_shows_command_ending_or_folder() {
+        let mut s = status(None, Some("~/src/app"));
+        assert_eq!(s.detail(None), "~/src/app");
+        s.command = Some("cargo".to_string());
+        assert_eq!(s.detail(None), "cargo");
+        s.ended = Some("exit 101".to_string());
+        assert_eq!(s.detail(Some("cargo build".to_string())), "cargo build · exit 101");
+        assert_eq!(s.detail(None), "exit 101");
+    }
 }

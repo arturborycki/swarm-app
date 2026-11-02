@@ -68,7 +68,7 @@ impl AppearanceManager {
                         (font_name, *match_fonts)
                     };
 
-                    if let Some(new_family) = get_or_load_font_family(&font_name, ctx) {
+                    if let Some(new_family) = get_or_load_monospace_font_family(&font_name, ctx) {
                         Appearance::handle(ctx).update(ctx, |appearance, ctx| {
                             appearance.set_monospace_font_family(new_family, ctx);
                             if match_fonts {
@@ -113,7 +113,7 @@ impl AppearanceManager {
                     if match_ai_font_to_terminal_font {
                         let font_name = settings.monospace_font_name.value().clone();
 
-                        if let Some(new_family) = get_or_load_font_family(&font_name, ctx) {
+                        if let Some(new_family) = get_or_load_monospace_font_family(&font_name, ctx) {
                             Appearance::handle(ctx).update(ctx, |appearance, ctx| {
                                 appearance.set_ai_font_family(new_family, ctx)
                             });
@@ -331,6 +331,12 @@ fn load_default_ui_font_family(ctx: &mut AppContext) -> anyhow::Result<FamilyId>
             ],
         );
 
+        // Swarm on macOS uses the system font (SF Pro), like native Mac apps.
+        #[cfg(target_os = "macos")]
+        if let Ok(font_family_id) = font_cache.load_system_font(".AppleSystemUIFont") {
+            return Ok(font_family_id);
+        }
+
         // On Windows, default to use Segoe UI as the UI font. This font is recommended by
         // Windows when rendering any UI text: https://learn.microsoft.com/en-us/windows/win32/uxguide/vis-fonts.
         // This font should be bundled with any modern version of Windows, if we can't load it for
@@ -351,6 +357,18 @@ fn load_password_font_family(ctx: &mut AppContext) -> anyhow::Result<FamilyId> {
             vec![ASSETS.get("bundled/fonts/password.ttf")?.to_vec()],
         )
     })
+}
+
+/// The terminal font named in settings. Swarm on macOS draws terminals in
+/// SF Mono while the setting is left at its default.
+fn get_or_load_monospace_font_family(font_name: &str, ctx: &mut AppContext) -> Option<FamilyId> {
+    if cfg!(target_os = "macos")
+        && font_name == crate::settings::DEFAULT_MONOSPACE_FONT_NAME
+        && let Some(family) = get_or_load_font_family(".AppleSystemUIFontMonospaced", ctx)
+    {
+        return Some(family);
+    }
+    get_or_load_font_family(font_name, ctx)
 }
 
 #[cfg(target_family = "wasm")]
@@ -403,7 +421,8 @@ fn build_appearance(ctx: &mut AppContext) -> Appearance {
         .clone();
     let am_font_name = FontSettings::as_ref(ctx).ai_font_name.value().clone();
 
-    let monospace_font_family_from_settings = get_or_load_font_family(&monospace_font_name, ctx);
+    let monospace_font_family_from_settings =
+        get_or_load_monospace_font_family(&monospace_font_name, ctx);
 
     let ui_font_family =
         load_default_ui_font_family(ctx).expect("unable to load default ui font family");

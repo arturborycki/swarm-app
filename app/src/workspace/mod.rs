@@ -967,9 +967,23 @@ pub fn init(app: &mut AppContext) {
         ]);
     }
 
+    // swarm-term: session commands in the command palette (⌘P). They take no
+    // keys here: the File menu already gives Open Session and Connect theirs.
+    app.register_editable_bindings([
+        EditableBinding::new("swarm:new_session", "New session", WorkspaceAction::SwarmNewSession { host: None })
+            .with_group(bindings::BindingGroup::Settings.as_str())
+            .with_context_predicate(id!("Workspace")),
+        EditableBinding::new("swarm:open_session", "Open session…", WorkspaceAction::SwarmShowPicker)
+            .with_group(bindings::BindingGroup::Settings.as_str())
+            .with_context_predicate(id!("Workspace")),
+        EditableBinding::new("swarm:connect_host", "Connect to host…", WorkspaceAction::SwarmShowConnect)
+            .with_group(bindings::BindingGroup::Settings.as_str())
+            .with_context_predicate(id!("Workspace")),
+    ]);
+
     app.register_editable_bindings([EditableBinding::new(
         "workspace:rename_active_tab",
-        "Rename the current tab",
+        if crate::swarm::SWARM_CHROME { "Rename the current session" } else { "Rename the current tab" },
         WorkspaceAction::RenameActiveTab,
     )
     .with_group(bindings::BindingGroup::Settings.as_str())

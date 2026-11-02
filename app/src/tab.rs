@@ -1101,6 +1101,8 @@ pub struct TabComponent<'a> {
     /// swarm-term: the color of the session's host, drawn as a line along
     /// the top of the selected tab.
     swarm_host_fill: Option<ThemeFill>,
+    /// swarm-term: the second line under a daemon session's name.
+    subtitle: Option<String>,
     /// True when this tab is part of a multi-tab (count > 1) selection. Drives
     /// both the in-selection highlight and the right-click menu dispatch
     /// (multi-tab menu vs single-tab menu).
@@ -1214,8 +1216,24 @@ impl<'a> TabComponent<'a> {
         let shell_indicator_type = tab.pane_group.as_ref(ctx).focused_shell_indicator_type(ctx);
         // swarm-term: an idle session's mark yields to other indicators; any
         // other state is shown over them.
-        let (swarm_mark, swarm_host) = Self::swarm_session_mark(tab, ctx).unzip();
-        let swarm_host = swarm_host.flatten();
+        let swarm_status = Self::swarm_session_status(tab, ctx);
+        let swarm_mark = swarm_status.as_ref().map(|status| status.mark);
+        let swarm_host = swarm_status.as_ref().and_then(|status| status.host.clone());
+        // A daemon session's tab shows its name over what it is doing, as
+        // its sidebar row does.
+        let has_custom_title = tab.pane_group.as_ref(ctx).custom_title(ctx).is_some();
+        let (title, subtitle) = match &swarm_status {
+            Some(status) if crate::swarm::SWARM_CHROME => {
+                let last_command = tab
+                    .pane_group
+                    .as_ref(ctx)
+                    .focused_session_view(ctx)
+                    .and_then(|view| view.as_ref(ctx).last_completed_command_text());
+                let name = if has_custom_title { title } else { status.display_name() };
+                (name, Some(status.detail(last_command)).filter(|detail| !detail.is_empty()))
+            }
+            _ => (title, None),
+        };
         let swarm_indicator = |mark: crate::swarm::sessions::SessionMark| {
             let (icon, color) = mark.icon(appearance.theme(), swarm_host.as_deref());
             Indicator::SwarmSession { icon, color }
@@ -1272,7 +1290,8 @@ impl<'a> TabComponent<'a> {
             tab_bar,
             editor,
             title,
-            has_custom_title: tab.pane_group.as_ref(ctx).custom_title(ctx).is_some(),
+            subtitle,
+            has_custom_title,
             tab_index,
             styles: TabStyles::default(appearance, tab.color()),
             ui_builder: appearance.ui_builder().clone(),
@@ -1350,19 +1369,16 @@ impl<'a> TabComponent<'a> {
         false
     }
 
-    /// The state of the daemon session in the tab's focused terminal, and
-    /// its host (`None`: this Mac).
-    fn swarm_session_mark(
+    /// The status of the daemon session in the tab's focused terminal.
+    fn swarm_session_status(
         tab: &TabData,
         app: &AppContext,
-    ) -> Option<(crate::swarm::sessions::SessionMark, Option<String>)> {
+    ) -> Option<crate::swarm::sessions::SessionStatus> {
         #[cfg(unix)]
         {
             let terminal_view = tab.pane_group.as_ref(app).focused_session_view(app)?;
             let id = terminal_view.as_ref(app).active_block_session_id()?;
-            crate::swarm::sessions::SwarmSessions::as_ref(app)
-                .status_for(id.as_u64())
-                .map(|status| (status.mark, status.host))
+            crate::swarm::sessions::SwarmSessions::as_ref(app).status_for(id.as_u64())
         }
         #[cfg(not(unix))]
         {
@@ -1570,12 +1586,14 @@ impl<'a> TabComponent<'a> {
             )
             .finish()
         } else {
-            Text::new_inline(
+            let font_family = self
+                .styles
+                .default
+                .font_family_id
+                .expect("Font family defined");
+            let title = Text::new_inline(
                 self.title.clone(),
-                self.styles
-                    .default
-                    .font_family_id
-                    .expect("Font family defined"),
+                font_family,
                 self.styles.default.font_size.expect("Font size defined"),
             )
             .with_clip(if self.should_clip_text_start() {
@@ -1585,7 +1603,25 @@ impl<'a> TabComponent<'a> {
             })
             .with_style(font_style)
             .with_color(font_color)
-            .finish()
+            .finish();
+            match &self.subtitle {
+                Some(subtitle) => {
+                    let theme = self.appearance.theme();
+                    Flex::column()
+                        .with_main_axis_size(MainAxisSize::Min)
+                        .with_main_axis_alignment(MainAxisAlignment::Center)
+                        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                        .with_child(title)
+                        .with_child(
+                            Text::new_inline(subtitle.clone(), font_family, 10.5)
+                                .with_clip(ClipConfig::end())
+                                .with_color(theme.sub_text_color(theme.background()).into())
+                                .finish(),
+                        )
+                        .finish()
+                }
+                None => title,
+            }
         }
     }
 

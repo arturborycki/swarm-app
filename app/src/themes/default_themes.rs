@@ -272,6 +272,21 @@ pub fn dark_theme() -> WarpTheme {
     )
 }
 
+/// Swarm's default: charcoal instead of Dark's near-black, with a soft blue
+/// accent (the system accent replaces it unless Multicolor is chosen).
+pub fn swarm_theme() -> WarpTheme {
+    WarpTheme::new(
+        Fill::Solid(ColorU::from_u32(0x1A1B1FFF)),
+        ColorU::from_u32(0xE8E9ECFF),
+        Fill::Solid(ColorU::from_u32(0x7FB0FFFF)),
+        None,
+        Some(Details::Darker),
+        dark_mode_colors(),
+        None,
+        Some("Swarm".to_string()),
+    )
+}
+
 pub fn light_theme() -> WarpTheme {
     WarpTheme::new(
         Fill::Solid(ColorU::white()),

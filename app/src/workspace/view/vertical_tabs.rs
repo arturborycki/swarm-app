@@ -35,7 +35,7 @@ use warpui::ui_components::components::{UiComponent, UiComponentStyles};
 use warpui::ui_components::text_input::TextInput;
 use warpui::{AppContext, EntityId, SingletonEntity, ViewHandle, WindowId};
 
-use super::{render_group_member_icon_collage, select_unique_pane_kinds};
+use super::select_unique_pane_kinds;
 use crate::ai::agent::conversation::{ConversationStatus, StatusColorStyle};
 use crate::ai::agent_management::AgentNotificationsModel;
 use crate::ai::cloud_environments::CloudAmbientAgentEnvironment;
@@ -106,7 +106,6 @@ const GROUP_ACTION_BUTTON_PADDING: f32 = 2.;
 const GROUP_ACTION_BUTTON_GAP: f32 = 2.;
 const ROW_CORNER_RADIUS: f32 = 4.;
 const TAB_GROUP_MEMBER_INDENT: f32 = 12.;
-const TAB_GROUP_ICON_SIZE: f32 = 16.;
 const TAB_GROUP_CONTENT_INSET: f32 = 4.;
 const BADGE_ICON_SIZE: f32 = 12.;
 const DETAIL_SIDECAR_DEFAULT_WIDTH: f32 = 320.;
@@ -373,6 +372,7 @@ fn render_pane_row_element(
     padding: Padding,
     defer_events_to_children: bool,
     content: Box<dyn Element>,
+    host_bar: Option<ThemeFill>,
     theme: &WarpTheme,
 ) -> Box<dyn Element> {
     let detail_target = supports_vertical_tabs_detail_sidecar(&props.typed).then(|| {
@@ -438,13 +438,16 @@ fn render_pane_row_element(
             container = container.with_background(background);
         }
 
-        let pane: Box<dyn Element> = container
-            .with_border(Border::all(1.).with_border_fill(if is_selected {
+        // A Swarm session's selected row is marked by a bar in its host's color.
+        let border = match host_bar {
+            Some(bar) if is_selected => Border::left(2.).with_border_fill(bar),
+            _ => Border::all(1.).with_border_fill(if is_selected {
                 internal_colors::fg_overlay_3(theme).into()
             } else {
                 ElementFill::None
-            }))
-            .finish();
+            }),
+        };
+        let pane: Box<dyn Element> = container.with_border(border).finish();
 
         // Pin indicator anchored at the visible pane's top-right corner. Pin
         // is visible when the container is not hovered.
@@ -2090,6 +2093,16 @@ fn render_groups(
                 i += run_len;
             }
             None => {
+                // This Mac's sessions are listed under their own header, like a
+                // host group, as in the sidebar mockup.
+                let follows_group = i == 0 || workspace.tabs[visible_tabs[i - 1].0].group_id.is_some();
+                if follows_group && !crate::swarm::pane_group_is_remote(tab.pane_group.as_ref(app), app) {
+                    let run_len = visible_tabs[i..]
+                        .iter()
+                        .take_while(|(idx, _)| workspace.tabs[*idx].group_id.is_none())
+                        .count();
+                    groups.add_child(render_swarm_this_mac_header(run_len, app));
+                }
                 let insert_before_index = tab_index;
                 // Gaps between tabs are covered by the next tab's before-indicator,
                 // and the area after the last tab by the trailing indicator below,
@@ -2260,8 +2273,6 @@ fn render_tab_group_internal(
         && !workspace
             .current_workspace_state
             .is_agent_management_view_open;
-    let has_top_border = tab_index > 0;
-    let is_first_tab = tab_index == 0;
     let is_last_tab = tab_index + 1 == workspace.tabs.len();
     let is_this_tab_dragging = tab.draggable_state.is_dragging();
     // Panes inherit multi-selection status from the tab they belong to.
@@ -2273,7 +2284,6 @@ fn render_tab_group_internal(
     let per_pane_colors = color_mode.into_per_pane_colors(&visible_pane_ids);
     let is_being_renamed = is_active && workspace.current_workspace_state.is_tab_being_renamed();
     let rename_editor = workspace.tab_rename_editor.clone();
-    let has_custom_title = pane_group.custom_title(app).is_some();
     // In Panes view, tabs inside a group render individual pane rows, so each
     // pane keeps its own generated title. Propagating the tab's custom title as
     // an override here would shadow every pane's title with the same string.
@@ -2455,11 +2465,8 @@ fn render_tab_group_internal(
             rows.finish()
         };
 
-        let show_header = should_show_tab_group_header(
-            has_custom_title,
-            is_being_renamed,
-            visible_pane_ids.len(),
-        );
+        // A one-session tab's name is on its row; Swarm shows no caption above it.
+        let show_header = should_show_tab_group_header(false, is_being_renamed, visible_pane_ids.len());
         let group_content = if uses_outer_group_container {
             let mut group = Flex::column()
                 .with_main_axis_size(MainAxisSize::Min)
@@ -2489,21 +2496,14 @@ fn render_tab_group_internal(
                     .with_padding(body_padding)
                     .finish(),
             );
+            // Swarm lists sessions without dividers or a band behind the
+            // active tab: its row shows the selection.
             let background = if is_drag_target {
                 internal_colors::fg_overlay_2(theme)
-            } else if is_active || group_state.is_hovered() {
-                internal_colors::fg_overlay_1(theme)
             } else {
                 ThemeFill::Solid(ColorU::transparent_black())
             };
             let mut container = Container::new(group.finish()).with_background(background);
-            if has_top_border || is_first_tab || is_last_tab {
-                container = container.with_border(
-                    Border::new(1.)
-                        .with_sides(has_top_border || is_first_tab, false, is_last_tab, false)
-                        .with_border_fill(internal_colors::fg_overlay_1(theme)),
-                );
-            }
             if is_drag_target {
                 container = container.with_foreground_border(
                     Border::all(1.).with_border_fill(ThemeFill::Solid(theme.accent().into())),
@@ -2842,6 +2842,55 @@ pub(crate) fn render_tab_group_for_drag_ghost(
     )
 }
 
+/// The header over this Mac's ungrouped sessions, laid out like a tab group's
+/// header (with room where its chevron sits) so the swatches line up.
+fn render_swarm_this_mac_header(count: usize, app: &AppContext) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let font_family = appearance.ui_font_family();
+    let sub_text_color = theme.sub_text_color(theme.background());
+    let swatch = ConstrainedBox::new(
+        Container::new(Empty::new().finish())
+            .with_background(theme.accent())
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.)))
+            .finish(),
+    )
+    .with_width(8.)
+    .with_height(8.)
+    .finish();
+    let row = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(6.)
+        .with_child(swatch)
+        .with_child(
+            Shrinkable::new(
+                1.,
+                Text::new_inline("THIS MAC".to_string(), font_family, 11.)
+                    .with_style(Properties::default().weight(Weight::Semibold))
+                    .with_color(sub_text_color.into())
+                    .finish(),
+            )
+            .finish(),
+        )
+        .with_child(
+            Text::new_inline(count.to_string(), font_family, 11.)
+                .with_style(Properties::default().weight(Weight::Medium))
+                .with_color(sub_text_color.into())
+                .finish(),
+        )
+        .finish();
+    let chevron_width = 10. + 2. * GROUP_ACTION_BUTTON_PADDING;
+    Container::new(row)
+        .with_padding(
+            Padding::uniform(4.)
+                .with_left(GROUP_HORIZONTAL_PADDING + 6. + chevron_width + ICON_WITH_STATUS_GAP)
+                .with_right(6. + GROUP_HORIZONTAL_PADDING),
+        )
+        .with_margin_top(8.)
+        .finish()
+}
+
 /// Small icon button for the tab-group header; consumes clicks so they don't bubble.
 fn render_tab_group_header_icon_button(
     icon: WarpIcon,
@@ -2893,77 +2942,68 @@ fn render_grouped_tabs_header(
     show_action_buttons: bool,
     is_being_renamed: bool,
     rename_editor: Option<&ViewHandle<EditorView>>,
-    collapsed_member_kinds: Option<&[SummaryPaneKind]>,
+    _collapsed_member_kinds: Option<&[SummaryPaneKind]>,
     ctx: &AppContext,
 ) -> Box<dyn Element> {
     let appearance = Appearance::as_ref(ctx);
     let theme = appearance.theme();
     let font_family = appearance.ui_font_family();
-    let main_text_color = theme.main_text_color(theme.background());
     let sub_text_color = theme.sub_text_color(theme.background());
     let group_id = group.id;
 
-    // Collapsed groups show the icon collage (same component as horizontal tab
-    // groups) in place of the chevron, sized to VERTICAL_TABS_ICON_SIZE so
-    // the 2-icon variant matches the tab Summary Pair layout exactly.
-    let tab_group_icon = if is_collapsed {
-        let kinds = collapsed_member_kinds.unwrap_or(&[]);
-        render_group_member_icon_collage(kinds, VERTICAL_TABS_ICON_SIZE, appearance)
-    } else {
-        let chevron_button = render_tab_group_header_icon_button(
-            WarpIcon::ChevronDown,
-            TAB_GROUP_ICON_SIZE,
-            main_text_color,
-            internal_colors::fg_overlay_2(theme),
-            mouse_states.chevron.clone(),
-            Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
-        );
-        // Center the chevron in a `VERTICAL_TABS_ICON_SIZE` slot so the
-        // title aligns with member rows.
-        Flex::row()
-            .with_main_axis_size(MainAxisSize::Max)
-            .with_main_axis_alignment(MainAxisAlignment::Center)
-            .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_child(chevron_button)
-            .finish()
-    };
-    let tab_group_icon = ConstrainedBox::new(tab_group_icon)
-        .with_width(VERTICAL_TABS_ICON_SIZE)
-        .with_height(VERTICAL_TABS_ICON_SIZE)
-        .finish();
+    // Swarm's group header is one small uppercase line: chevron, the group's
+    // color swatch, its name, and how many sessions it holds.
+    let tab_group_icon = render_tab_group_header_icon_button(
+        if is_collapsed { WarpIcon::ChevronRight } else { WarpIcon::ChevronDown },
+        10.,
+        sub_text_color,
+        internal_colors::fg_overlay_2(theme),
+        mouse_states.chevron.clone(),
+        Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
+    );
+    let swatch_fill: WarpThemeFill = group
+        .color
+        .resolve(None)
+        .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into())
+        .unwrap_or_else(|| internal_colors::fg_overlay_4(theme));
+    let swatch = ConstrainedBox::new(
+        Container::new(Empty::new().finish())
+            .with_background(swatch_fill)
+            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(2.)))
+            .finish(),
+    )
+    .with_width(8.)
+    .with_height(8.)
+    .finish();
 
     let title_element: Box<dyn Element> =
         if let Some(editor) = rename_editor.filter(|_| is_being_renamed) {
             render_inline_tab_rename_editor(editor, appearance, ctx)
         } else {
-            let title_text = group_display_name(group);
-            let highlight_indices = group_name_highlight_indices(&title_text, search_query);
-            Text::new_inline(title_text, font_family, 12.)
+            let title_text = group_display_name(group).to_uppercase();
+            let highlight_indices = group_name_highlight_indices(&title_text, &search_query.to_uppercase());
+            Text::new_inline(title_text, font_family, 11.)
                 .with_clip(ClipConfig::ellipsis())
-                .with_color(main_text_color.into())
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .with_color(sub_text_color.into())
                 .with_single_highlight(
                     Highlight::new().with_properties(Properties::default().weight(Weight::Bold)),
                     highlight_indices,
                 )
                 .finish()
         };
-    let subtitle_text = if member_count == 1 {
-        "1 tab".to_string()
-    } else {
-        format!("{member_count} tabs")
-    };
-    let subtitle = Text::new_inline(subtitle_text, font_family, 10.)
-        .with_clip(ClipConfig::ellipsis())
+    let count = Text::new_inline(member_count.to_string(), font_family, 11.)
+        .with_style(Properties::default().weight(Weight::Medium))
         .with_color(sub_text_color.into())
         .finish();
-    let text_column: Box<dyn Element> = Flex::column()
-        .with_main_axis_size(MainAxisSize::Min)
-        .with_cross_axis_alignment(CrossAxisAlignment::Start)
-        .with_spacing(1.)
-        .with_child(title_element)
-        .with_child(subtitle)
+    let text_column: Box<dyn Element> = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(6.)
+        .with_child(swatch)
+        .with_child(Shrinkable::new(1., title_element).finish())
+        .with_child(count)
         .finish();
-
     let action_buttons = if show_action_buttons {
         let kebab_button = SavePosition::new(
             render_tab_group_header_icon_button(
@@ -3033,7 +3073,7 @@ fn render_grouped_tabs_header(
             WarpThemeFill::Solid(ColorU::transparent_black())
         };
         let mut container = Container::new(row)
-            .with_padding(Padding::uniform(GROUP_HORIZONTAL_PADDING))
+            .with_padding(Padding::uniform(4.).with_left(6.).with_right(6.))
             .with_corner_radius(CornerRadius::with_all(Radius::Pixels(ROW_CORNER_RADIUS)))
             .with_border(Border::all(1.).with_border_fill(border_fill));
         if let Some(color) = group_color_fill {
@@ -3235,7 +3275,7 @@ fn render_grouped_tab_container(
                     Container::new(tab_element)
                         .with_padding(
                             Padding::uniform(0.)
-                                .with_left(TAB_GROUP_MEMBER_INDENT)
+                                .with_left(0.)
                                 .with_right(TAB_GROUP_CONTENT_INSET),
                         )
                         .finish(),
@@ -3243,30 +3283,8 @@ fn render_grouped_tab_container(
             }
         }
 
-        // When the group is colored, tint the container with the group's color as
-        // a backdrop (member rows carry their own colors and layer on top), and
-        // strengthen that tint on hover/active as the highlight. Fall back to the
-        // neutral highlight when the group has no color.
-        let group_color_fill: Option<ThemeFill> = group
-            .color
-            .resolve(None)
-            .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into());
-        let is_highlighted = hover_state.is_hovered() || any_member_active;
-        let background = if let Some(color) = group_color_fill {
-            // Highlight a colored tab group when it is hovered or active,
-            // but not as much as regular colored active tabs (otherwise
-            // nested color tabs appear very faded).
-            let opacity = if is_highlighted {
-                TAB_COLOR_OPACITY + 10
-            } else {
-                TAB_COLOR_OPACITY
-            };
-            color.with_opacity(opacity)
-        } else if is_highlighted {
-            internal_colors::fg_overlay_1(theme)
-        } else {
-            ThemeFill::Solid(ColorU::transparent_black())
-        };
+        // Swarm doesn't tint groups: the header's swatch carries the color.
+        let background = ThemeFill::Solid(ColorU::transparent_black());
 
         // Pane view: uniform `GROUP_HORIZONTAL_PADDING` matches ungrouped-tab body padding.
         // Tab view: only apply bottom padding when expanded so a collapsed group has no trailing band.
@@ -3709,6 +3727,12 @@ fn render_row_title_line(
 }
 
 fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
+    #[cfg(unix)]
+    if let TypedPane::Terminal(terminal_pane) = &props.typed
+        && let Some(status) = swarm_session_status(terminal_pane.terminal_view(app).as_ref(app), app)
+    {
+        return render_swarm_session_row(props, status, app);
+    }
     let effective_subtitle = props.subtitle.clone();
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -3809,7 +3833,148 @@ fn render_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
         .with_child(Shrinkable::new(1., text_content).finish())
         .finish();
 
-    render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+    render_pane_row_element(props, Padding::uniform(8.), true, content, None, theme)
+}
+
+const SWARM_MARK_SIZE: f32 = 12.;
+
+/// Swarm's sidebar row for a daemon session: its state mark, its name over
+/// what it is doing, and when it was last active on the right.
+#[cfg(unix)]
+fn render_swarm_session_row(
+    mut props: PaneProps<'_>,
+    status: crate::swarm::sessions::SessionStatus,
+    app: &AppContext,
+) -> Box<dyn Element> {
+    let appearance = Appearance::as_ref(app);
+    let theme = appearance.theme();
+    let font_family = appearance.ui_font_family();
+    let sub_text_color = theme.sub_text_color(theme.background());
+    let is_selected = props.is_active_tab && props.is_focused;
+
+    let (icon, icon_color) = status.mark.icon(theme, status.host.as_deref());
+    let mark = Container::new(
+        ConstrainedBox::new(icon.to_warpui_icon(icon_color).finish())
+            .with_width(SWARM_MARK_SIZE)
+            .with_height(SWARM_MARK_SIZE)
+            .finish(),
+    )
+    .with_margin_top(3.)
+    .finish();
+
+    let name_color = if status.ended.is_some() {
+        sub_text_color
+    } else {
+        theme.main_text_color(theme.background())
+    };
+    let name = status.display_name();
+    let title = render_pane_title_slot(
+        &props,
+        |style| {
+            let style = if is_selected { style.weight(Weight::Semibold) } else { style };
+            Text::new_inline(name, font_family, 13.)
+                .with_clip(ClipConfig::ellipsis())
+                .with_style(style)
+                .with_color(name_color.into())
+                .finish()
+        },
+        13.,
+        name_color,
+        ClipConfig::ellipsis(),
+        appearance,
+        app,
+    );
+    let last_command = match &props.typed {
+        TypedPane::Terminal(terminal_pane) => {
+            terminal_pane.terminal_view(app).as_ref(app).last_completed_command_text()
+        }
+        _ => None,
+    };
+    let detail = status.detail(last_command);
+    let text = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_spacing(1.)
+        .with_child(title)
+        .with_child(
+            Text::new_inline(detail, font_family, 11.)
+                .with_clip(ClipConfig::ellipsis())
+                .with_color(sub_text_color.into())
+                .finish(),
+        )
+        .finish();
+
+    let mut side = Flex::column()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::End)
+        .with_spacing(5.)
+        .with_child(
+            Text::new_inline(crate::swarm::ago(status.last_activity_ms).trim_end_matches(" ago").to_string(), font_family, 11.)
+                .with_color(sub_text_color.into())
+                .finish(),
+        );
+    let mut marks = Flex::row()
+        .with_main_axis_size(MainAxisSize::Min)
+        .with_cross_axis_alignment(CrossAxisAlignment::Center)
+        .with_spacing(4.);
+    let mut has_marks = false;
+    if row_shows_synced_inputs_indicator(&props, app) {
+        marks.add_child(render_synced_inputs_indicator());
+        has_marks = true;
+    }
+    if status.elsewhere {
+        marks.add_child(
+            ConstrainedBox::new(
+                WarpIcon::CircleFilled
+                    .to_warpui_icon(theme.terminal_colors().normal.blue.into())
+                    .finish(),
+            )
+            .with_width(6.)
+            .with_height(6.)
+            .finish(),
+        );
+        has_marks = true;
+    }
+    if let Some(label) = shortcut_hint_label(&props, app) {
+        marks.add_child(render_shortcut_hint(&label, appearance));
+        has_marks = true;
+    }
+    if has_marks {
+        side.add_child(marks.finish());
+    }
+
+    let content = Flex::row()
+        .with_main_axis_size(MainAxisSize::Max)
+        .with_main_axis_alignment(MainAxisAlignment::SpaceBetween)
+        .with_cross_axis_alignment(CrossAxisAlignment::Start)
+        .with_child(
+            Shrinkable::new(
+                1.,
+                Flex::row()
+                    .with_main_axis_size(MainAxisSize::Max)
+                    .with_cross_axis_alignment(CrossAxisAlignment::Start)
+                    .with_spacing(8.)
+                    .with_child(mark)
+                    .with_child(Shrinkable::new(1., text).finish())
+                    .finish(),
+            )
+            .finish(),
+        )
+        .with_child(Container::new(side.finish()).with_margin_left(8.).finish())
+        .finish();
+
+    // Rows aren't tinted with their group's color: the mark and the bar
+    // already say which host a session is on.
+    props.pane_color = None;
+    let host_bar = crate::swarm::host_fill(theme, status.host.as_deref());
+    render_pane_row_element(
+        props,
+        Padding::uniform(7.).with_left(8.).with_right(8.),
+        true,
+        content,
+        Some(host_bar),
+        theme,
+    )
 }
 
 enum TypedPane<'a> {
@@ -5054,6 +5219,12 @@ fn render_summary_tab_item(
     pr_badge_mouse_states: &[MouseStateHandle],
     app: &AppContext,
 ) -> Box<dyn Element> {
+    #[cfg(unix)]
+    if let TypedPane::Terminal(terminal_pane) = &props.typed
+        && let Some(status) = swarm_session_status(terminal_pane.terminal_view(app).as_ref(app), app)
+    {
+        return render_swarm_session_row(props, status, app);
+    }
     // Region caps for v2 per-line rendering: each region shows at most 3 visible lines
     // before collapsing the rest into a `+ N more` overflow line.
     const MAX_VISIBLE_PRIMARY_LABELS: usize = 3;
@@ -5246,7 +5417,7 @@ fn render_summary_tab_item(
         .with_child(Shrinkable::new(1., text_col.finish()).finish())
         .finish();
 
-    render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+    render_pane_row_element(props, Padding::uniform(8.), true, content, None, theme)
 }
 
 fn render_summary_primary_label_line(
@@ -7590,6 +7761,12 @@ pub(super) fn render_detail_sidecar(
 }
 
 fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn Element> {
+    #[cfg(unix)]
+    if let TypedPane::Terminal(terminal_pane) = &props.typed
+        && let Some(status) = swarm_session_status(terminal_pane.terminal_view(app).as_ref(app), app)
+    {
+        return render_swarm_session_row(props, status, app);
+    }
     let effective_subtitle = props.subtitle.clone();
     let appearance = Appearance::as_ref(app);
     let theme = appearance.theme();
@@ -7786,7 +7963,7 @@ fn render_compact_pane_row(props: PaneProps<'_>, app: &AppContext) -> Box<dyn El
         .with_child(Shrinkable::new(1., text_col.finish()).finish())
         .finish();
 
-    render_pane_row_element(props, Padding::uniform(8.), true, content, theme)
+    render_pane_row_element(props, Padding::uniform(8.), true, content, None, theme)
 }
 
 impl Workspace {

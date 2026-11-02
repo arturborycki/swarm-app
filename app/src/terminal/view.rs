@@ -783,7 +783,9 @@ lazy_static! {
 
     /// The padding between the left of the element and where the grid contents (either via the
     /// `BlockList` or the `AltScreen`) should be rendered.
-    pub static ref PADDING_LEFT: f32 = 16.;
+    /// swarm-term: wider, so text clears the edge of Swarm's block cards
+    /// (8 px from the pane's side) by 14 px.
+    pub static ref PADDING_LEFT: f32 = if crate::swarm::SWARM_CHROME { 22. } else { 16. };
 }
 
 /// Interval at which the live command duration counter repaints.
