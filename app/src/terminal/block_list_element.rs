@@ -2408,8 +2408,8 @@ impl BlockListElement {
         ctx: &mut PaintContext,
     ) {
         let block_height = block.height(transcript_scope).as_f64() as f32 * cell_size.y();
+        // swarm-term: a session is one surface; commands aren't boxed apart.
         if crate::swarm::SWARM_CHROME {
-            draw_swarm_block_card(grid_origin, block_height, bounds, block, warp_theme, ctx);
             return;
         }
         if block.is_restored()
@@ -4923,42 +4923,3 @@ where
 
     button.finish()
 }
-
-/// Swarm draws each block as a rounded card inset from the pane's edges,
-/// with a red outline once its command has failed.
-fn draw_swarm_block_card(
-    grid_origin: Vector2F,
-    block_height: f32,
-    bounds: RectF,
-    block: &Block,
-    warp_theme: &WarpTheme,
-    ctx: &mut PaintContext,
-) {
-    let card = RectF::new(
-        grid_origin + vec2f(SWARM_CARD_MARGIN_X, SWARM_CARD_GAP / 2.),
-        vec2f(
-            (bounds.width() - 2. * SWARM_CARD_MARGIN_X).max(0.),
-            (block_height - SWARM_CARD_GAP).max(0.),
-        ),
-    );
-    let (background, outline) = if block.has_failed() {
-        (
-            warp_theme.failed_block_color().with_opacity(8),
-            warp_theme.failed_block_color().with_opacity(45),
-        )
-    } else {
-        (
-            warp_core::ui::theme::color::internal_colors::fg_overlay_1(warp_theme),
-            warp_core::ui::theme::color::internal_colors::fg_overlay_2(warp_theme),
-        )
-    };
-    ctx.scene
-        .draw_rect_with_hit_recording(card)
-        .with_background(background)
-        .with_border(Border::all(1.).with_border_fill(outline))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)));
-}
-
-/// How far a block's card sits from the pane's sides, and the gap between cards.
-const SWARM_CARD_MARGIN_X: f32 = 8.;
-const SWARM_CARD_GAP: f32 = 8.;

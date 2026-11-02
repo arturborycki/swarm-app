@@ -17263,7 +17263,7 @@ impl View for Input {
                     ambient_agent_model.as_ref(app).should_show_status_footer()
                 });
 
-        let input = if FeatureFlag::CloudMode.is_enabled() && should_show_status_footer {
+        if FeatureFlag::CloudMode.is_enabled() && should_show_status_footer {
             self.render_ambient_agent_status_footer(app)
         } else if FeatureFlag::AgentView.is_enabled()
             && self.agent_view_controller.as_ref(app).is_active()
@@ -17278,11 +17278,6 @@ impl View for Input {
             self.render_universal_developer_input(app)
         } else {
             self.render_classic_input(app)
-        };
-        if crate::swarm::SWARM_CHROME {
-            render_swarm_input_box(input, app)
-        } else {
-            input
         }
     }
 }
@@ -17323,20 +17318,6 @@ impl Autosuggester for Input {
     fn set_autosuggestion_future(&mut self, abort_handle: AbortHandle) {
         self.autosuggestions_abort_handle = Some(abort_handle);
     }
-}
-
-/// Swarm's input sits in a rounded box above the bottom of the pane, lined up
-/// with the block cards above it.
-fn render_swarm_input_box(input: Box<dyn Element>, app: &AppContext) -> Box<dyn Element> {
-    let theme = Appearance::as_ref(app).theme();
-    Container::new(input)
-        .with_background(internal_colors::fg_overlay_1(theme))
-        .with_border(warpui::elements::Border::all(1.).with_border_fill(internal_colors::fg_overlay_3(theme)))
-        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(10.)))
-        .with_margin_left(8.)
-        .with_margin_right(8.)
-        .with_margin_bottom(8.)
-        .finish()
 }
 
 /// Returns an optional element to be rendered at the start of the editor buffer, almost like a

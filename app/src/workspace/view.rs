@@ -27918,17 +27918,8 @@ impl View for Workspace {
             let translucent = sidebar_shown
                 .then(|| util::swarm_translucent_sidebar_fills(self.window_id, app))
                 .flatten();
-            // Beside a translucent sidebar the terminal sits in a rounded panel
-            // inset from the window's edges.
             let content = match &translucent {
-                Some((_, terminal_layer)) => Container::new(content)
-                    .with_background(*terminal_layer)
-                    .with_corner_radius(CornerRadius::with_all(Radius::Pixels(SWARM_PANEL_RADIUS)))
-                    .with_border(Border::all(1.).with_border_fill(internal_colors::fg_overlay_2(appearance.theme())))
-                    .with_margin_top(SWARM_PANEL_INSET)
-                    .with_margin_right(SWARM_PANEL_INSET)
-                    .with_margin_bottom(SWARM_PANEL_INSET)
-                    .finish(),
+                Some((_, terminal_layer)) => Container::new(content).with_background(*terminal_layer).finish(),
                 None => content,
             };
             let panels_row = self.render_panels(app, Shrinkable::new(1.0, content).finish(), false);
@@ -31046,11 +31037,6 @@ fn swarm_tab_bar_host_label(name: &str, swatch: Fill, appearance: &Appearance) -
 /// swarm-term: the tab strip under the title row while the sidebar is hidden.
 const SWARM_TAB_STRIP_HEIGHT: f32 = 48.;
 const SWARM_TAB_STRIP_PADDING: f32 = 10.;
-
-/// swarm-term: how far the terminal's panel sits from the window's edges
-/// beside a translucent sidebar, and its corners.
-const SWARM_PANEL_INSET: f32 = 6.;
-const SWARM_PANEL_RADIUS: f32 = 10.;
 
 /// swarm-term: the line between hosts in the tab bar.
 fn swarm_tab_bar_divider(appearance: &Appearance) -> Box<dyn Element> {

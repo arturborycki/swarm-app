@@ -368,6 +368,11 @@ impl<P: BackingView> PaneView<P> {
     }
 }
 
+/// swarm-term: a pane panel's corners, and the space between panels (and
+/// half of it around the outside).
+const SWARM_PANE_RADIUS: f32 = 10.;
+const SWARM_PANE_GAP: f32 = 8.;
+
 #[derive(PartialEq, Copy, Clone, Debug)]
 pub struct PaneDropTargetData {
     id: PaneId,
@@ -417,6 +422,15 @@ impl<P: BackingView> View for PaneView<P> {
         column.add_child(Shrinkable::new(1., ChildView::new(&active_child).finish()).finish());
 
         let mut container = Container::new(column.finish());
+        // swarm-term: each pane is one session, drawn as its own rounded
+        // panel; split panes sit side by side with a gap between them.
+        if crate::swarm::SWARM_CHROME {
+            container = container
+                .with_background(warp_core::ui::theme::color::internal_colors::fg_overlay_1(appearance.theme()))
+                .with_border(Border::all(1.).with_border_fill(warp_core::ui::theme::color::internal_colors::fg_overlay_2(appearance.theme())))
+                .with_corner_radius(warpui::elements::CornerRadius::with_all(warpui::elements::Radius::Pixels(SWARM_PANE_RADIUS)))
+                .with_uniform_margin(SWARM_PANE_GAP / 2.);
+        }
         if pane_configuration.show_accent_border {
             let border = Border::all(2.).with_border_fill(appearance.theme().accent());
             container = container.with_border(border);
