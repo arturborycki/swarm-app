@@ -107,6 +107,7 @@ fn buttons_row(children: Vec<Box<dyn Element>>) -> Box<dyn Element> {
 pub enum DaemonPageAction {
     SetAtLogin(bool),
     SetRestore(bool),
+    SetSpill(bool),
     Restart,
     OpenLogs,
     Refresh,
@@ -206,6 +207,12 @@ impl TypedActionView for DaemonPageView {
                 self.run_task(note, async move { daemon::set_restore_after_reboot(None, on).await }, ctx);
             }
             #[cfg(unix)]
+            DaemonPageAction::SetSpill(on) => {
+                let on = *on;
+                let note = if on { "Turning on keeping scrollback on disk…" } else { "Turning off keeping scrollback on disk…" };
+                self.run_task(note, async move { daemon::set_spill_to_disk(None, on).await }, ctx);
+            }
+            #[cfg(unix)]
             DaemonPageAction::Restart => {
                 self.run_task("Restarting the daemon…", async { daemon::restart_daemon(None).await }, ctx);
             }
@@ -242,6 +249,7 @@ impl View for DaemonPageView {
 struct DaemonWidget {
     at_login_switch: SwitchStateHandle,
     restore_switch: SwitchStateHandle,
+    spill_switch: SwitchStateHandle,
     restart: MouseStateHandle,
     logs: MouseStateHandle,
     refresh: MouseStateHandle,
@@ -251,7 +259,7 @@ impl SettingsWidget for DaemonWidget {
     type View = DaemonPageView;
 
     fn search_terms(&self) -> &str {
-        "daemon swarmd sessions start at login restart logs background"
+        "daemon swarmd sessions start at login restart logs background scrollback disk spill history"
     }
 
     fn render(&self, view: &DaemonPageView, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
@@ -266,6 +274,10 @@ impl SettingsWidget for DaemonWidget {
         {
             let restore = match &view.status {
                 Load::Ready(status) => status.restore_after_reboot,
+                _ => None,
+            };
+            let spill = match &view.status {
+                Load::Ready(status) => status.spill_to_disk,
                 _ => None,
             };
             let (headline, detail, at_login, ready) = match &view.status {
@@ -335,6 +347,26 @@ impl SettingsWidget for DaemonWidget {
                     appearance,
                     Some(
                         "When the Mac restarts, programs in your sessions end. With this on, each session comes back as a new shell with the same name, folder, group and tab position."
+                            .into(),
+                    ),
+                ));
+            }
+            if let Some(spill) = spill {
+                column.add_child(render_separator(appearance));
+                column.add_child(render_sub_header(appearance, "Scrollback", None));
+                let switch = appearance
+                    .ui_builder()
+                    .switch(self.spill_switch.clone())
+                    .check(spill)
+                    .build()
+                    .on_click(move |ctx, _, _| ctx.dispatch_typed_action(DaemonPageAction::SetSpill(!spill)))
+                    .finish();
+                column.add_child(build_toggle_element(
+                    line(appearance, "Keep scrollback beyond 16 MB on disk".into(), false),
+                    switch,
+                    appearance,
+                    Some(
+                        "Each session keeps its last 16 MB of output in memory. With this on, older output is kept on disk too, up to 256 MB per session, encrypted with a key only that session holds, and deleted with the session. See it all with swarmctl dump. Turning this off deletes it."
                             .into(),
                     ),
                 ));

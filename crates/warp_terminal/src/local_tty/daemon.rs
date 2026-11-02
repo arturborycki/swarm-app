@@ -1133,6 +1133,9 @@ pub struct DaemonStatus {
     /// Sessions are recreated after a reboot (`swarmd restore on`); `None`
     /// when the daemon predates the feature.
     pub restore_after_reboot: Option<bool>,
+    /// Output beyond the in-memory buffer is kept on disk, encrypted
+    /// (`swarmd spill on`); `None` when the daemon predates the feature.
+    pub spill_to_disk: Option<bool>,
     pub sessions: usize,
     pub running: usize,
     pub detached: usize,
@@ -1148,12 +1151,15 @@ pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
     let at_login = swarmd_command(host, &["service", "status"]).await?.contains("start mode: at-login");
     let restore_after_reboot =
         swarmd_command(host, &["restore", "status"]).await.ok().map(|out| out.contains("restore after reboot: on"));
+    let spill_to_disk =
+        swarmd_command(host, &["spill", "status"]).await.ok().map(|out| out.contains("spill to disk: on"));
     Ok(DaemonStatus {
         version: info.version,
         hostname: info.hostname,
         os: info.os,
         at_login,
         restore_after_reboot,
+        spill_to_disk,
         sessions: sessions.len(),
         running: sessions.iter().filter(|s| s.is_running()).count(),
         detached: sessions.iter().filter(|s| s.is_running() && s.clients.is_empty()).count(),
@@ -1169,6 +1175,12 @@ pub async fn set_start_at_login(host: Option<&str>, at_login: bool) -> Result<()
 /// Turns restoring sessions after a reboot on or off for `host`'s daemon.
 pub async fn set_restore_after_reboot(host: Option<&str>, on: bool) -> Result<()> {
     swarmd_command(host, &["restore", if on { "on" } else { "off" }]).await.map(|_| ())
+}
+
+/// Turns keeping output beyond the in-memory buffer on disk (encrypted) on
+/// or off for `host`'s daemon. Off deletes what was kept.
+pub async fn set_spill_to_disk(host: Option<&str>, on: bool) -> Result<()> {
+    swarmd_command(host, &["spill", if on { "on" } else { "off" }]).await.map(|_| ())
 }
 
 /// Stops `host`'s daemon and starts it again. Sessions keep running (the
