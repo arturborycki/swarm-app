@@ -1,15 +1,16 @@
-//! "Check for Updates…": compares this app's version with the latest release
-//! published on GitHub (`v<version>` tags with a `Swarm-<version>.dmg` asset,
-//! see `scripts/make-dmg.sh` in the swarm-term repo). It only reads the
-//! release; downloading and installing are left to the user (the DMG) or
-//! Homebrew (`brew upgrade --cask swarm`).
+//! "Check for Updates…": compares this app's version with the latest release,
+//! read from swarm-term.com's feed (`/releases/latest.json`, in the shape of
+//! GitHub's "latest release" API: a `v<version>` tag and a `Swarm-<version>.dmg`
+//! asset). The site serves it so the check works while the GitHub repository is
+//! private. It only reads the release; downloading and installing are left to
+//! the user (the DMG) or Homebrew (`brew upgrade --cask swarm`).
 
 use anyhow::{bail, Context, Result};
 use serde::Deserialize;
 use version_compare::{Cmp, Version};
 
 /// Where releases are published.
-const DEFAULT_FEED: &str = "https://api.github.com/repos/arturborycki/swarm-term/releases/latest";
+const DEFAULT_FEED: &str = "https://swarm-term.com/releases/latest.json";
 
 /// This app's version.
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
@@ -47,7 +48,7 @@ fn feed() -> String {
 }
 
 /// The latest release if it's newer than `current`. `None` when there is no
-/// newer one, or nothing is published yet (GitHub answers 404).
+/// newer one, or nothing is published yet (the feed answers 404).
 pub async fn check(current: &str) -> Result<Option<Update>> {
     let response = reqwest::Client::new()
         .get(feed())
