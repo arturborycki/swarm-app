@@ -171,20 +171,42 @@ fn stage(dmg: &Path, bundle: &Path, version: &str) -> Result<Staged> {
     let copied = run(Command::new("/usr/bin/ditto").arg(mountpoint.join("Swarm.app")).arg(&staged))
         .context("copy Swarm.app out of the DMG");
     let _ = run(Command::new("/usr/bin/hdiutil").arg("detach").arg(&mountpoint).arg("-force"));
-    let checked = copied.and_then(|()| check_staged(&staged, version));
+    let checked = copied.and_then(|()| check_staged(&staged, bundle, version));
     if checked.is_err() {
         let _ = std::fs::remove_dir_all(&staged);
     }
     checked.map(|()| Staged { staged, bundle: bundle.to_path_buf() })
 }
 
-fn check_staged(staged: &Path, version: &str) -> Result<()> {
+fn check_staged(staged: &Path, bundle: &Path, version: &str) -> Result<()> {
     let id = plist_value(staged, "CFBundleIdentifier")?;
     ensure!(id == BUNDLE_ID, "the DMG holds {id}, not Swarm");
     let staged_version = plist_value(staged, "CFBundleShortVersionString")?;
     ensure!(staged_version == version, "the DMG holds Swarm {staged_version}, not {version}");
     run(Command::new("/usr/bin/codesign").args(["--verify", "--deep", "--strict"]).arg(staged))
-        .context("the new Swarm.app's code signature doesn't verify")
+        .context("the new Swarm.app's code signature doesn't verify")?;
+    // A Developer ID-signed Swarm only updates to one signed by the same team
+    // (ad-hoc builds have none, and may update to a signed one).
+    if let Some(team) = team_id(bundle)? {
+        let staged_team = team_id(staged)?;
+        ensure!(
+            staged_team.as_deref() == Some(team.as_str()),
+            "the new Swarm.app isn't signed by this app's developer ({team})"
+        );
+    }
+    Ok(())
+}
+
+/// The Apple team that signed `bundle`; `None` for an ad-hoc signature.
+fn team_id(bundle: &Path) -> Result<Option<String>> {
+    let output = Command::new("/usr/bin/codesign").arg("-dv").arg(bundle).output()?;
+    ensure!(output.status.success(), "can't read the code signature of {}", bundle.display());
+    // codesign -d writes its report to stderr.
+    Ok(String::from_utf8_lossy(&output.stderr)
+        .lines()
+        .find_map(|line| line.strip_prefix("TeamIdentifier="))
+        .filter(|team| *team != "not set")
+        .map(str::to_string))
 }
 
 fn plist_value(bundle: &Path, key: &str) -> Result<String> {

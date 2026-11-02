@@ -21,3 +21,13 @@ fn signature_is_for_one_file_and_one_version() {
     let garbage = Signed { signature: "not base64!".into(), ..release_0_1_1() };
     assert!(verify_signature("0.1.1", &garbage).is_err());
 }
+
+#[test]
+fn ad_hoc_signature_has_no_team() {
+    let dir = tempfile::tempdir().unwrap();
+    let bin = dir.path().join("true");
+    std::fs::copy("/usr/bin/true", &bin).unwrap();
+    run(Command::new("/usr/bin/codesign").args(["--force", "--sign", "-"]).arg(&bin)).unwrap();
+    assert_eq!(team_id(&bin).unwrap(), None);
+    assert!(team_id(&dir.path().join("missing")).is_err());
+}
