@@ -15,7 +15,7 @@ mod text_layout;
 pub mod utils;
 mod window;
 
-pub use app::{App, AppExt};
+pub use app::{App, AppExt, StatusItemIcon};
 use clipboard::*;
 use cocoa::base::{id, nil};
 use cocoa::foundation::NSAutoreleasePool;

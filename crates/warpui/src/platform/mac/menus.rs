@@ -8,7 +8,7 @@ use cocoa::base::{id, nil};
 use lazy_static::lazy_static;
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::Sel;
-use objc2::{MainThreadMarker, sel};
+use objc2::{AnyThread, MainThreadMarker, sel};
 use objc2_app_kit::{
     NSApplication, NSControlStateValue, NSDownArrowFunctionKey, NSEndFunctionKey,
     NSEventModifierFlags, NSF1FunctionKey, NSF2FunctionKey, NSF3FunctionKey, NSF4FunctionKey,
@@ -27,7 +27,7 @@ use warpui_core::platform::menu::{
     UpdateMenuItemCallback,
 };
 
-use super::app::callback_dispatcher;
+use super::app::{StatusItemIcon, callback_dispatcher};
 
 lazy_static! {
     /// A mac-menu-specific map of key names to special characters used for the keyboard shortcuts
@@ -420,9 +420,9 @@ pub unsafe fn make_dock_menu(menu: Menu) -> Retained<NSMenu> {
     }
 }
 
-/// Puts a status item showing the SF Symbol `symbol` in the menu bar, with
-/// `menu` (whose items update when it opens). It stays for the app's lifetime.
-pub unsafe fn install_status_item(symbol: &str, menu: Menu) {
+/// Puts a status item showing `icon` in the menu bar, with `menu` (whose
+/// items update when it opens). It stays for the app's lifetime.
+pub unsafe fn install_status_item(icon: StatusItemIcon, menu: Menu) {
     unsafe {
         let mtm = MainThreadMarker::new_unchecked();
         let nsmenu = make_delegated_menu(Retained::as_ptr(&NSString::from_str(&menu.title)) as id);
@@ -433,10 +433,26 @@ pub unsafe fn install_status_item(symbol: &str, menu: Menu) {
         let bar = objc2_app_kit::NSStatusBar::systemStatusBar();
         let status_item = bar.statusItemWithLength(objc2_app_kit::NSVariableStatusItemLength);
         if let Some(button) = status_item.button(mtm) {
-            let image = objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
-                &NSString::from_str(symbol),
-                Some(&NSString::from_str(&menu.title)),
-            );
+            let image = match icon {
+                StatusItemIcon::Symbol(symbol) => {
+                    objc2_app_kit::NSImage::imageWithSystemSymbolName_accessibilityDescription(
+                        &NSString::from_str(symbol),
+                        Some(&NSString::from_str(&menu.title)),
+                    )
+                }
+                StatusItemIcon::Template(png) => {
+                    let data = objc2_foundation::NSData::with_bytes(png);
+                    let image = objc2_app_kit::NSImage::initWithData(
+                        objc2_app_kit::NSImage::alloc(),
+                        &data,
+                    );
+                    if let Some(image) = &image {
+                        image.setSize(objc2_foundation::NSSize::new(18., 18.));
+                        image.setAccessibilityDescription(Some(&NSString::from_str(&menu.title)));
+                    }
+                    image
+                }
+            };
             match image {
                 Some(image) => {
                     image.setTemplate(true);

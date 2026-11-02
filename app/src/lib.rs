@@ -6,7 +6,6 @@ mod antivirus;
 #[cfg(target_os = "macos")]
 mod app_menus;
 mod app_services;
-pub(crate) mod swarm;
 mod app_state;
 mod auth;
 mod autoupdate;
@@ -74,6 +73,7 @@ mod server;
 mod session_management;
 mod shell_indicator;
 mod suggestions;
+pub(crate) mod swarm;
 mod system;
 mod tab;
 #[cfg(test)]
@@ -1289,7 +1289,12 @@ fn run_internal(mut launch_mode: LaunchMode) -> Result<()> {
         app_builder.set_menu_bar_builder(app_menus::menu_bar);
         app_builder.set_dock_menu_builder(|ctx| app_menus::dock_menu(ctx));
         if crate::swarm::SWARM_CHROME {
-            app_builder.set_status_menu_builder("terminal", |_| app_menus::swarm_status_menu());
+            app_builder.set_status_menu_builder(
+                warpui::platform::mac::StatusItemIcon::Template(include_bytes!(
+                    "../channels/swarm/status/SwarmStatus@2x.png"
+                )),
+                |_| app_menus::swarm_status_menu(),
+            );
         }
     }
 
@@ -3186,11 +3191,14 @@ fn launch(ctx: &mut warpui::AppContext, app_state: Option<AppState>, launch_mode
             // start duplicate shells; `root_view:open_new` reattaches the
             // daemon's sessions instead.
             let use_daemon = crate::swarm::use_daemon_sessions();
-            let app_state = if should_skip_restore || use_daemon { None } else { app_state };
+            let app_state = if should_skip_restore || use_daemon {
+                None
+            } else {
+                app_state
+            };
             // Attempt to restore windows from the persisted application state.
             let arg = OpenFromRestoredArg { app_state };
             ctx.dispatch_global_action("root_view:open_from_restored", &arg);
-
 
             // Process any URLs that were provided on the command line (which may be
             // file:// URLs or ones using our custom URL scheme).
