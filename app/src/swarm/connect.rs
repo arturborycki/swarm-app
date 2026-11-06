@@ -37,6 +37,8 @@ pub enum SwarmConnectEvent {
     Close,
     /// Connected: show `host`'s sessions.
     ChooseSessions(String),
+    /// Connected to a host with no sessions: start one there.
+    NewSession(String),
     /// Run a suggested fix in a new local tab, where ssh can ask the user for a password.
     RunInTerminal(String),
 }
@@ -48,6 +50,7 @@ pub enum SwarmConnectAction {
     Install,
     SetAtLogin(bool),
     ChooseSessions,
+    NewSession,
     CopyFix,
     RunFix,
     Cancel,
@@ -305,7 +308,20 @@ impl SwarmConnect {
     }
 
     fn choose_sessions(&mut self, ctx: &mut ViewContext<Self>) {
-        let (Outcome::Connected(status), Some(host)) = (&self.outcome, self.host.clone()) else { return };
+        if let Some(host) = self.apply_start_mode(ctx) {
+            ctx.emit(SwarmConnectEvent::ChooseSessions(host));
+        }
+    }
+
+    fn new_session(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(host) = self.apply_start_mode(ctx) {
+            ctx.emit(SwarmConnectEvent::NewSession(host));
+        }
+    }
+
+    /// Saves the chosen start mode, returning the connected host.
+    fn apply_start_mode(&mut self, ctx: &mut ViewContext<Self>) -> Option<String> {
+        let (Outcome::Connected(status), Some(host)) = (&self.outcome, self.host.clone()) else { return None };
         if self.at_login != status.at_login
             && let Some(daemons) = daemon::daemons()
         {
@@ -317,7 +333,7 @@ impl SwarmConnect {
                 }
             });
         }
-        ctx.emit(SwarmConnectEvent::ChooseSessions(host));
+        Some(host)
     }
 
     fn mouse_for(&self, key: &str) -> MouseStateHandle {
@@ -403,6 +419,7 @@ impl TypedActionView for SwarmConnect {
                 ctx.notify();
             }
             SwarmConnectAction::ChooseSessions => self.choose_sessions(ctx),
+            SwarmConnectAction::NewSession => self.new_session(ctx),
             SwarmConnectAction::CopyFix => {
                 if let Outcome::Failed { fix: Some((_, Some(command))), .. } = &self.outcome {
                     ctx.clipboard().write(ClipboardContent::plain_text(command.clone()));
@@ -710,6 +727,14 @@ impl View for SwarmConnect {
             } else {
                 button(appearance, self.mouse_for("retry"), "Retry".into(), ButtonStyle::Primary, true, SwarmConnectAction::Retry)
             }),
+            Outcome::Connected(status) if status.sessions == 0 => actions.add_child(button(
+                appearance,
+                self.mouse_for("new-session"),
+                "New Session →".into(),
+                ButtonStyle::Primary,
+                true,
+                SwarmConnectAction::NewSession,
+            )),
             Outcome::Connected(_) => actions.add_child(button(
                 appearance,
                 self.mouse_for("choose"),

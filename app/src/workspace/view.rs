@@ -6445,6 +6445,14 @@ impl Workspace {
                 me.show_swarm_picker = true;
                 ctx.notify();
             }
+            SwarmConnectEvent::NewSession(host) => {
+                warp_terminal::local_tty::daemon::remember_host(host);
+                crate::swarm::sessions::SwarmSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.watch_host(host.clone(), ctx)
+                });
+                me.hide_swarm_connect(ctx);
+                me.new_swarm_session(Some(host.clone()), ctx);
+            }
             SwarmConnectEvent::RunInTerminal(command) => {
                 me.hide_swarm_connect(ctx);
                 me.add_tab_with_pane_layout(

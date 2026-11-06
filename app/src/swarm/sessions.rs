@@ -12,6 +12,8 @@ type Host = Option<String>;
 
 pub struct SwarmSessions {
     by_host: BTreeMap<Host, Vec<DaemonSession>>,
+    /// Hosts whose daemon has reported its sessions at least once.
+    loaded: BTreeSet<Host>,
     /// Things the user should look at (sessions that failed, connections that
     /// were lost), by (host, session id): what to tell them.
     attention: BTreeMap<(Host, String), String>,
@@ -167,6 +169,7 @@ impl SwarmSessions {
         let _ = ctx.spawn_stream_local(output_rx, Self::on_unseen_output, |_, _| {});
         let me = SwarmSessions {
             by_host: BTreeMap::new(),
+            loaded: BTreeSet::new(),
             attention: BTreeMap::new(),
             reconnecting: BTreeSet::new(),
             link_announcement_due: false,
@@ -196,6 +199,9 @@ impl SwarmSessions {
     }
 
     fn on_sessions(&mut self, (host, sessions): (Host, Vec<DaemonSession>), ctx: &mut ModelContext<Self>) {
+        if self.loaded.insert(host.clone()) {
+            ctx.emit(SwarmSessionsEvent::Changed);
+        }
         if self.by_host.get(&host) == Some(&sessions) {
             return;
         }
@@ -432,6 +438,11 @@ impl SwarmSessions {
     }
 
     /// `host`'s sessions as last seen (`None`: the local daemon).
+    /// Whether `host`'s list is real yet, rather than empty because nothing has arrived.
+    pub fn is_loaded(&self, host: Option<&str>) -> bool {
+        self.loaded.contains(&host.map(str::to_string))
+    }
+
     pub fn sessions_on(&self, host: Option<&str>) -> &[DaemonSession] {
         self.by_host.get(&host.map(str::to_string)).map(Vec::as_slice).unwrap_or(&[])
     }
