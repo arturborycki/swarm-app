@@ -592,25 +592,22 @@ impl View for SwarmConnect {
         };
         match &self.outcome {
             Outcome::Failed { message, fix } => {
-                let mut column = Flex::column().with_spacing(6.).with_child(wrapped(failure_text(&host, message), main));
+                let mut column = Flex::column().with_spacing(6.).with_cross_axis_alignment(CrossAxisAlignment::Stretch).with_child(wrapped(failure_text(&host, message), main));
                 if let Some((explanation, command)) = fix {
                     column.add_child(wrapped(explanation.clone(), sub));
                     if let Some(command) = command {
                         column.add_child(
+                            Container::new(Text::new(command.clone(), mono, 12.).with_color(main.into()).finish())
+                                .with_background(internal_colors::fg_overlay_2(theme))
+                                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)))
+                                .with_uniform_padding(6.)
+                                .finish(),
+                        );
+                        column.add_child(
                             Flex::row()
-                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                .with_main_axis_size(MainAxisSize::Max)
+                                .with_main_axis_alignment(MainAxisAlignment::End)
                                 .with_spacing(8.)
-                                .with_child(
-                                    Expanded::new(
-                                        1.,
-                                        Container::new(Text::new(command.clone(), mono, 12.).with_color(main.into()).finish())
-                                            .with_background(internal_colors::fg_overlay_2(theme))
-                                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)))
-                                            .with_uniform_padding(6.)
-                                            .finish(),
-                                    )
-                                    .finish(),
-                                )
                                 .with_child(button(
                                     appearance,
                                     self.mouse_for("copy"),
