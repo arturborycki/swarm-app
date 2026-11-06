@@ -6445,6 +6445,21 @@ impl Workspace {
                 me.show_swarm_picker = true;
                 ctx.notify();
             }
+            SwarmConnectEvent::RunInTerminal(command) => {
+                me.hide_swarm_connect(ctx);
+                me.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(crate::pane_group::NewTerminalOptions {
+                        hide_homepage: true,
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    Some("Set up SSH".to_string()),
+                    ctx,
+                );
+                if let Some(terminal) = me.active_tab_pane_group().as_ref(ctx).active_session_view(ctx) {
+                    terminal.update(ctx, |terminal, ctx| terminal.execute_command_or_set_pending(command, ctx));
+                }
+            }
         });
         sheet
     }
