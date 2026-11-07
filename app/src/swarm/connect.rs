@@ -37,6 +37,10 @@ pub enum SwarmConnectEvent {
     Close,
     /// Connected: show `host`'s sessions.
     ChooseSessions(String),
+    /// Connected to a host with no sessions: start one there.
+    NewSession(String),
+    /// Run a suggested fix in a new local tab, where ssh can ask the user for a password.
+    RunInTerminal(String),
 }
 
 #[derive(Debug, Clone)]
@@ -47,6 +51,7 @@ pub enum SwarmConnectAction {
     SetAtLogin(bool),
     ChooseSessions,
     CopyFix,
+    RunFix,
     Cancel,
 }
 
@@ -263,7 +268,14 @@ impl SwarmConnect {
                     }
                     me.steps.push(sessions);
                     me.at_login = status.at_login;
+                    let has_sessions = status.running > 0;
                     me.outcome = Outcome::Connected(status);
+                    // Nothing left to decide: show the host's sessions, or start the first one.
+                    if has_sessions {
+                        me.choose_sessions(ctx);
+                    } else {
+                        me.new_session(ctx);
+                    }
                 }
                 Ok((Err(e), _)) => {
                     let message = format!("{e:#}");
@@ -302,7 +314,20 @@ impl SwarmConnect {
     }
 
     fn choose_sessions(&mut self, ctx: &mut ViewContext<Self>) {
-        let (Outcome::Connected(status), Some(host)) = (&self.outcome, self.host.clone()) else { return };
+        if let Some(host) = self.apply_start_mode(ctx) {
+            ctx.emit(SwarmConnectEvent::ChooseSessions(host));
+        }
+    }
+
+    fn new_session(&mut self, ctx: &mut ViewContext<Self>) {
+        if let Some(host) = self.apply_start_mode(ctx) {
+            ctx.emit(SwarmConnectEvent::NewSession(host));
+        }
+    }
+
+    /// Saves the chosen start mode, returning the connected host.
+    fn apply_start_mode(&mut self, ctx: &mut ViewContext<Self>) -> Option<String> {
+        let (Outcome::Connected(status), Some(host)) = (&self.outcome, self.host.clone()) else { return None };
         if self.at_login != status.at_login
             && let Some(daemons) = daemon::daemons()
         {
@@ -314,7 +339,7 @@ impl SwarmConnect {
                 }
             });
         }
-        ctx.emit(SwarmConnectEvent::ChooseSessions(host));
+        Some(host)
     }
 
     fn mouse_for(&self, key: &str) -> MouseStateHandle {
@@ -327,14 +352,28 @@ impl SwarmConnect {
 fn ssh_fix(host: &str, message: &str) -> Option<(String, Option<String>)> {
     let m = message.to_lowercase();
     if m.contains("permission denied") {
-        Some((
-            format!("Your key isn't loaded or isn't authorized on {host}. Add it to the agent, then retry:"),
-            Some("ssh-add".to_string()),
-        ))
+        // ssh lists what the server accepts: "Permission denied (publickey,password)".
+        if m.contains("password") || m.contains("keyboard-interactive") {
+            Some((
+                format!(
+                    "Swarm signs in with SSH keys, and {host} didn't accept yours. Set your key up once in a \
+                     terminal, typing {host}'s password when ssh asks, then connect again:"
+                ),
+                Some(key_setup_command(host)),
+            ))
+        } else {
+            Some((
+                format!(
+                    "{host} only accepts SSH keys, and didn't accept yours. Load your key with this command. If \
+                     that doesn't help, ask {host}'s administrator to add your public key (~/.ssh/*.pub)."
+                ),
+                Some("ssh-add".to_string()),
+            ))
+        }
     } else if m.contains("host key verification failed") {
         Some((
             format!("{host}'s host key isn't trusted yet. Connect once in a terminal to check and accept it:"),
-            Some(format!("ssh {host}")),
+            Some(format!("ssh {}", shell_words::quote(host))),
         ))
     } else if m.contains("could not resolve hostname") {
         Some((format!("{host} isn't a name ssh can find. Check the spelling, or add it to ~/.ssh/config."), None))
@@ -344,6 +383,24 @@ fn ssh_fix(host: &str, message: &str) -> Option<(String, Option<String>)> {
         Some((format!("{host} didn't answer. Check the network or VPN, then retry."), None))
     } else {
         None
+    }
+}
+
+/// Creates a key if there's none, installs it on `host` (ssh-copy-id asks for the password, and
+/// does nothing if the key is already there) and loads it, so that non-interactive ssh can use it.
+fn key_setup_command(host: &str) -> String {
+    format!(
+        "test -e ~/.ssh/id_ed25519.pub || test -e ~/.ssh/id_rsa.pub || test -e ~/.ssh/id_ecdsa.pub || ssh-keygen -t ed25519; ssh-copy-id {} && ssh-add",
+        shell_words::quote(host)
+    )
+}
+
+/// ssh's message, with the `host: ` prefix unless ssh already starts with it.
+fn failure_text(host: &str, message: &str) -> String {
+    if message.starts_with(&format!("{host}:")) {
+        message.to_string()
+    } else {
+        format!("{host}: {message}")
     }
 }
 
@@ -371,6 +428,11 @@ impl TypedActionView for SwarmConnect {
             SwarmConnectAction::CopyFix => {
                 if let Outcome::Failed { fix: Some((_, Some(command))), .. } = &self.outcome {
                     ctx.clipboard().write(ClipboardContent::plain_text(command.clone()));
+                }
+            }
+            SwarmConnectAction::RunFix => {
+                if let Outcome::Failed { fix: Some((_, Some(command))), .. } = &self.outcome {
+                    ctx.emit(SwarmConnectEvent::RunInTerminal(command.clone()));
                 }
             }
             SwarmConnectAction::Cancel => ctx.emit(SwarmConnectEvent::Close),
@@ -552,25 +614,22 @@ impl View for SwarmConnect {
         };
         match &self.outcome {
             Outcome::Failed { message, fix } => {
-                let mut column = Flex::column().with_spacing(6.).with_child(wrapped(format!("{host}: {message}"), main));
+                let mut column = Flex::column().with_spacing(6.).with_cross_axis_alignment(CrossAxisAlignment::Stretch).with_child(wrapped(failure_text(&host, message), main));
                 if let Some((explanation, command)) = fix {
                     column.add_child(wrapped(explanation.clone(), sub));
                     if let Some(command) = command {
                         column.add_child(
+                            Container::new(Text::new(command.clone(), mono, 12.).with_color(main.into()).finish())
+                                .with_background(internal_colors::fg_overlay_2(theme))
+                                .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)))
+                                .with_uniform_padding(6.)
+                                .finish(),
+                        );
+                        column.add_child(
                             Flex::row()
-                                .with_cross_axis_alignment(CrossAxisAlignment::Center)
+                                .with_main_axis_size(MainAxisSize::Max)
+                                .with_main_axis_alignment(MainAxisAlignment::End)
                                 .with_spacing(8.)
-                                .with_child(
-                                    Expanded::new(
-                                        1.,
-                                        Container::new(Text::new_inline(command.clone(), mono, 12.).with_color(main.into()).finish())
-                                            .with_background(internal_colors::fg_overlay_2(theme))
-                                            .with_corner_radius(CornerRadius::with_all(Radius::Pixels(5.)))
-                                            .with_uniform_padding(6.)
-                                            .finish(),
-                                    )
-                                    .finish(),
-                                )
                                 .with_child(button(
                                     appearance,
                                     self.mouse_for("copy"),
@@ -578,6 +637,14 @@ impl View for SwarmConnect {
                                     ButtonStyle::Plain,
                                     true,
                                     SwarmConnectAction::CopyFix,
+                                ))
+                                .with_child(button(
+                                    appearance,
+                                    self.mouse_for("run-fix"),
+                                    "Open in Terminal".into(),
+                                    ButtonStyle::Plain,
+                                    true,
+                                    SwarmConnectAction::RunFix,
                                 ))
                                 .finish(),
                         );
@@ -720,3 +787,7 @@ impl View for SwarmConnect {
         .finish()
     }
 }
+
+#[cfg(test)]
+#[path = "connect_tests.rs"]
+mod tests;

@@ -6417,6 +6417,7 @@ impl Workspace {
     #[cfg(unix)]
     fn show_swarm_connect(&mut self, host: Option<String>, ctx: &mut ViewContext<Self>) {
         self.show_swarm_picker = false;
+        self.swarm_picker.update(ctx, |picker, _| picker.closed());
         self.swarm_connect.update(ctx, |sheet, ctx| sheet.open(host, ctx));
         self.show_swarm_connect = true;
         ctx.notify();
@@ -6444,6 +6445,29 @@ impl Workspace {
                 me.swarm_picker.update(ctx, |picker, ctx| picker.open_on(Some(host.clone()), ctx));
                 me.show_swarm_picker = true;
                 ctx.notify();
+            }
+            SwarmConnectEvent::NewSession(host) => {
+                warp_terminal::local_tty::daemon::remember_host(host);
+                crate::swarm::sessions::SwarmSessions::handle(ctx).update(ctx, |sessions, ctx| {
+                    sessions.watch_host(host.clone(), ctx)
+                });
+                me.hide_swarm_connect(ctx);
+                me.new_swarm_session(Some(host.clone()), ctx);
+            }
+            SwarmConnectEvent::RunInTerminal(command) => {
+                me.hide_swarm_connect(ctx);
+                me.add_tab_with_pane_layout(
+                    PanesLayout::SingleTerminal(Box::new(crate::pane_group::NewTerminalOptions {
+                        hide_homepage: true,
+                        ..Default::default()
+                    })),
+                    Arc::new(HashMap::new()),
+                    Some("Set up SSH".to_string()),
+                    ctx,
+                );
+                if let Some(terminal) = me.active_tab_pane_group().as_ref(ctx).active_session_view(ctx) {
+                    terminal.update(ctx, |terminal, ctx| terminal.execute_command_or_set_pending(command, ctx));
+                }
             }
         });
         sheet
@@ -6859,6 +6883,7 @@ impl Workspace {
     #[cfg(unix)]
     fn hide_swarm_picker(&mut self, ctx: &mut ViewContext<Self>) {
         self.show_swarm_picker = false;
+        self.swarm_picker.update(ctx, |picker, _| picker.closed());
         self.focus_active_tab(ctx);
         ctx.notify();
     }

@@ -77,6 +77,8 @@ pub struct SwarmPicker {
     /// The keyboard's row in the filtered list.
     cursor: usize,
     note: Option<String>,
+    /// A server was just picked: start a session on it if its list turns out empty.
+    new_session_if_empty: bool,
     scroll: ClippedScrollStateHandle,
     mouse: RefCell<HashMap<String, MouseStateHandle>>,
     row_menu: ViewHandle<Menu<SwarmPickerAction>>,
@@ -159,6 +161,7 @@ impl SwarmPicker {
             let rows: BTreeSet<String> = me.rows(ctx).into_iter().map(|s| s.id).collect();
             me.selected.retain(|id| rows.contains(id));
             ctx.notify();
+            me.start_session_if_empty(ctx);
         });
         SwarmPicker {
             filter,
@@ -167,6 +170,7 @@ impl SwarmPicker {
             selected: BTreeSet::new(),
             cursor: 0,
             note: None,
+            new_session_if_empty: false,
             scroll: Default::default(),
             mouse: Default::default(),
             row_menu,
@@ -186,6 +190,24 @@ impl SwarmPicker {
         self.filter.update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         ctx.focus(&self.filter);
         ctx.notify();
+        self.new_session_if_empty = self.host.is_some();
+        self.start_session_if_empty(ctx);
+    }
+
+    /// Stops a pending `new_session_if_empty`, because the picker was closed.
+    pub fn closed(&mut self) {
+        self.new_session_if_empty = false;
+    }
+
+    /// Once the picked server's list is known: with no sessions there, starts the first one.
+    fn start_session_if_empty(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.new_session_if_empty || !SwarmSessions::as_ref(ctx).is_loaded(self.host.as_deref()) {
+            return;
+        }
+        self.new_session_if_empty = false;
+        if self.has_no_sessions(ctx) {
+            ctx.emit(SwarmPickerEvent::NewSession(self.host.clone()));
+        }
     }
 
     /// This Mac, then each followed host, with how many sessions each offers.
@@ -208,6 +230,15 @@ impl SwarmPicker {
             })
             .cloned()
             .collect()
+    }
+
+    /// The host has no sessions at all, open or not, and nothing is being filtered.
+    fn has_no_sessions(&self, app: &AppContext) -> bool {
+        let sessions = SwarmSessions::as_ref(app);
+        let host = self.host.as_deref();
+        self.query.trim().is_empty()
+            && sessions.is_loaded(host)
+            && !sessions.sessions_on(host).iter().any(DaemonSession::is_running)
     }
 
     fn move_cursor(&mut self, by: isize, ctx: &mut ViewContext<Self>) {
@@ -242,6 +273,10 @@ impl SwarmPicker {
     /// The checked sessions, or the highlighted one when none is checked.
     fn open_selected(&mut self, ctx: &mut ViewContext<Self>) {
         let rows = self.rows(ctx);
+        if self.has_no_sessions(ctx) {
+            ctx.emit(SwarmPickerEvent::NewSession(self.host.clone()));
+            return;
+        }
         let picked: Vec<_> = if self.selected.is_empty() {
             rows.get(self.cursor).cloned().into_iter().collect()
         } else {
@@ -426,6 +461,7 @@ impl View for SwarmPicker {
         let sub = theme.sub_text_color(theme.background());
         let accent = theme.accent();
         let rows = self.rows(app);
+        let no_sessions = self.has_no_sessions(app);
         let selected = rows.iter().filter(|s| self.selected.contains(&s.id)).count();
         let host_name = self.host.clone().unwrap_or_else(|| "This Mac".to_string());
 
@@ -570,7 +606,11 @@ impl View for SwarmPicker {
 
         let mut list = Flex::column().with_cross_axis_alignment(CrossAxisAlignment::Stretch);
         if rows.is_empty() {
-            let message = if self.query.trim().is_empty() {
+            let message = if no_sessions {
+                format!("No sessions on {host_name} yet.")
+            } else if !SwarmSessions::as_ref(app).is_loaded(self.host.as_deref()) {
+                format!("Looking for sessions on {host_name}…")
+            } else if self.query.trim().is_empty() {
                 format!("Every session on {host_name} is open.")
             } else {
                 format!("No sessions match “{}”.", self.query.trim())
@@ -701,18 +741,18 @@ impl View for SwarmPicker {
         let mut footer = Flex::row()
             .with_main_axis_size(MainAxisSize::Max)
             .with_cross_axis_alignment(CrossAxisAlignment::Center)
-            .with_spacing(8.)
-            .with_child(button(format!("+ New session on {host_name}"), "new", ButtonStyle::Link, true, SwarmPickerAction::NewSession))
-            .with_child(Expanded::new(1., warpui::elements::Empty::new().finish()).finish())
-            .with_child(button(format!("Terminate{count}"), "terminate", ButtonStyle::Plain, selected > 0, SwarmPickerAction::Terminate))
-            .with_child(button("Open all".to_string(), "open_all", ButtonStyle::Plain, !rows.is_empty(), SwarmPickerAction::OpenAll));
-        footer.add_child(button(
-            format!("Open{count}"),
-            "open",
-            ButtonStyle::Primary,
-            !rows.is_empty(),
-            SwarmPickerAction::OpenSelected,
-        ));
+            .with_spacing(8.);
+        if no_sessions {
+            // Nothing to open or terminate: the only thing to do is start one.
+            footer.add_child(Expanded::new(1., warpui::elements::Empty::new().finish()).finish());
+            footer.add_child(button(format!("New session on {host_name}"), "new", ButtonStyle::Primary, true, SwarmPickerAction::NewSession));
+        } else {
+            footer.add_child(button(format!("+ New session on {host_name}"), "new", ButtonStyle::Link, true, SwarmPickerAction::NewSession));
+            footer.add_child(Expanded::new(1., warpui::elements::Empty::new().finish()).finish());
+            footer.add_child(button(format!("Terminate{count}"), "terminate", ButtonStyle::Plain, selected > 0, SwarmPickerAction::Terminate));
+            footer.add_child(button("Open all".to_string(), "open_all", ButtonStyle::Plain, !rows.is_empty(), SwarmPickerAction::OpenAll));
+            footer.add_child(button(format!("Open{count}"), "open", ButtonStyle::Primary, !rows.is_empty(), SwarmPickerAction::OpenSelected));
+        }
         let footer = Container::new(footer.finish())
             .with_background(internal_colors::fg_overlay_1(theme))
             .with_border(Border::top(1.).with_border_fill(internal_colors::fg_overlay_2(theme)))
