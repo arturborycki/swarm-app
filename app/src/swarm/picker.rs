@@ -77,6 +77,8 @@ pub struct SwarmPicker {
     /// The keyboard's row in the filtered list.
     cursor: usize,
     note: Option<String>,
+    /// A server was just picked: start a session on it if its list turns out empty.
+    new_session_if_empty: bool,
     scroll: ClippedScrollStateHandle,
     mouse: RefCell<HashMap<String, MouseStateHandle>>,
     row_menu: ViewHandle<Menu<SwarmPickerAction>>,
@@ -159,6 +161,7 @@ impl SwarmPicker {
             let rows: BTreeSet<String> = me.rows(ctx).into_iter().map(|s| s.id).collect();
             me.selected.retain(|id| rows.contains(id));
             ctx.notify();
+            me.start_session_if_empty(ctx);
         });
         SwarmPicker {
             filter,
@@ -167,6 +170,7 @@ impl SwarmPicker {
             selected: BTreeSet::new(),
             cursor: 0,
             note: None,
+            new_session_if_empty: false,
             scroll: Default::default(),
             mouse: Default::default(),
             row_menu,
@@ -186,6 +190,24 @@ impl SwarmPicker {
         self.filter.update(ctx, |editor, ctx| editor.clear_buffer(ctx));
         ctx.focus(&self.filter);
         ctx.notify();
+        self.new_session_if_empty = self.host.is_some();
+        self.start_session_if_empty(ctx);
+    }
+
+    /// Stops a pending `new_session_if_empty`, because the picker was closed.
+    pub fn closed(&mut self) {
+        self.new_session_if_empty = false;
+    }
+
+    /// Once the picked server's list is known: with no sessions there, starts the first one.
+    fn start_session_if_empty(&mut self, ctx: &mut ViewContext<Self>) {
+        if !self.new_session_if_empty || !SwarmSessions::as_ref(ctx).is_loaded(self.host.as_deref()) {
+            return;
+        }
+        self.new_session_if_empty = false;
+        if self.has_no_sessions(ctx) {
+            ctx.emit(SwarmPickerEvent::NewSession(self.host.clone()));
+        }
     }
 
     /// This Mac, then each followed host, with how many sessions each offers.
@@ -214,7 +236,9 @@ impl SwarmPicker {
     fn has_no_sessions(&self, app: &AppContext) -> bool {
         let sessions = SwarmSessions::as_ref(app);
         let host = self.host.as_deref();
-        self.query.trim().is_empty() && sessions.is_loaded(host) && sessions.sessions_on(host).is_empty()
+        self.query.trim().is_empty()
+            && sessions.is_loaded(host)
+            && !sessions.sessions_on(host).iter().any(DaemonSession::is_running)
     }
 
     fn move_cursor(&mut self, by: isize, ctx: &mut ViewContext<Self>) {

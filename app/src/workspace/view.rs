@@ -6417,6 +6417,7 @@ impl Workspace {
     #[cfg(unix)]
     fn show_swarm_connect(&mut self, host: Option<String>, ctx: &mut ViewContext<Self>) {
         self.show_swarm_picker = false;
+        self.swarm_picker.update(ctx, |picker, _| picker.closed());
         self.swarm_connect.update(ctx, |sheet, ctx| sheet.open(host, ctx));
         self.show_swarm_connect = true;
         ctx.notify();
@@ -6882,6 +6883,7 @@ impl Workspace {
     #[cfg(unix)]
     fn hide_swarm_picker(&mut self, ctx: &mut ViewContext<Self>) {
         self.show_swarm_picker = false;
+        self.swarm_picker.update(ctx, |picker, _| picker.closed());
         self.focus_active_tab(ctx);
         ctx.notify();
     }

@@ -50,7 +50,6 @@ pub enum SwarmConnectAction {
     Install,
     SetAtLogin(bool),
     ChooseSessions,
-    NewSession,
     CopyFix,
     RunFix,
     Cancel,
@@ -269,7 +268,14 @@ impl SwarmConnect {
                     }
                     me.steps.push(sessions);
                     me.at_login = status.at_login;
+                    let has_sessions = status.running > 0;
                     me.outcome = Outcome::Connected(status);
+                    // Nothing left to decide: show the host's sessions, or start the first one.
+                    if has_sessions {
+                        me.choose_sessions(ctx);
+                    } else {
+                        me.new_session(ctx);
+                    }
                 }
                 Ok((Err(e), _)) => {
                     let message = format!("{e:#}");
@@ -419,7 +425,6 @@ impl TypedActionView for SwarmConnect {
                 ctx.notify();
             }
             SwarmConnectAction::ChooseSessions => self.choose_sessions(ctx),
-            SwarmConnectAction::NewSession => self.new_session(ctx),
             SwarmConnectAction::CopyFix => {
                 if let Outcome::Failed { fix: Some((_, Some(command))), .. } = &self.outcome {
                     ctx.clipboard().write(ClipboardContent::plain_text(command.clone()));
@@ -727,14 +732,6 @@ impl View for SwarmConnect {
             } else {
                 button(appearance, self.mouse_for("retry"), "Retry".into(), ButtonStyle::Primary, true, SwarmConnectAction::Retry)
             }),
-            Outcome::Connected(status) if status.sessions == 0 => actions.add_child(button(
-                appearance,
-                self.mouse_for("new-session"),
-                "New Session →".into(),
-                ButtonStyle::Primary,
-                true,
-                SwarmConnectAction::NewSession,
-            )),
             Outcome::Connected(_) => actions.add_child(button(
                 appearance,
                 self.mouse_for("choose"),
