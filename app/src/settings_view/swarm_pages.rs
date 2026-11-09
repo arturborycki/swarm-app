@@ -702,7 +702,9 @@ impl SettingsWidget for HostsWidget {
                 if !on {
                     column.add_child(line(
                         appearance,
-                        "Off: systemd may end your sessions when your last login to this host ends, for example when your Mac sleeps."
+                        "Off: systemd may end your sessions when your last login to this host ends, for example when your Mac sleeps. \
+                         Many servers (Ubuntu, for one) let only an administrator turn this on: if the switch reports \
+                         \"Access denied\", ask one to run `sudo loginctl enable-linger <your user>` there."
                             .into(),
                         true,
                     ));
