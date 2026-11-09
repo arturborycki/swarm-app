@@ -977,8 +977,19 @@ fn local_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 
-/// `uname -sm` output as `<os>-<arch>`, the way `swarmd` reports it.
+/// Platforms `swarmd` is built for. A host's answer is only used to pick
+/// one of these: it comes from the remote machine and must never become an
+/// arbitrary local path.
+const PLATFORMS: [&str; 4] = ["linux-x86_64", "linux-aarch64", "macos-x86_64", "macos-aarch64"];
+
+/// `uname -sm` output as `<os>-<arch>`, the way `swarmd` reports it, with
+/// anything but letters, digits, `-` and `_` removed (it's shown to the user;
+/// only `bundled_swarmd_dir`, which accepts just `PLATFORMS`, makes a path).
 fn platform_from_uname(uname: &str) -> String {
+    describe_uname(uname).chars().filter(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_')).take(40).collect()
+}
+
+fn describe_uname(uname: &str) -> String {
     let mut parts = uname.split_whitespace();
     let os = match parts.next().unwrap_or("") {
         "Darwin" => "macos".to_string(),
@@ -996,6 +1007,9 @@ fn platform_from_uname(uname: &str) -> String {
 /// (`<os>-<arch>`): next to the app's own binary for this Mac's platform,
 /// else `Contents/Resources/swarmd/<platform>/` (Linux builds).
 pub fn bundled_swarmd_dir(platform: &str) -> Option<std::path::PathBuf> {
+    if !PLATFORMS.contains(&platform) {
+        return None;
+    }
     let exe_dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
     let dir = if platform == local_platform() {
         exe_dir
@@ -1024,15 +1038,6 @@ pub async fn check_host(host: &str) -> HostCheck {
     HostCheck::NeedsInstall { installable: bundled_swarmd_dir(&os).is_some(), os }
 }
 
-/// Whether systemd keeps `host`'s user processes after logout (`loginctl
-/// enable-linger`); `None` where that doesn't apply (no systemd, macOS).
-pub async fn linger(host: &str) -> Option<bool> {
-    let output = ssh(host, r#"loginctl show-user "$USER" -p Linger 2>/dev/null"#).await.ok()?;
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let value = stdout.trim().strip_prefix("Linger=")?;
-    Some(value == "yes")
-}
-
 /// Turns lingering on or off for the ssh user on `host` (`loginctl
 /// enable-linger`), so systemd keeps their processes, sessions included,
 /// after they log out. Some hosts only let an administrator change it.
@@ -1041,10 +1046,12 @@ pub async fn set_linger(host: &str, on: bool) -> Result<()> {
     let output = ssh(host, &format!("loginctl {verb}")).await?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!(
-            "{} (an administrator can run `sudo loginctl {verb} <your user>` there)",
-            stderr.trim().lines().last().unwrap_or("loginctl failed")
-        );
+        let message = stderr.trim().lines().last().unwrap_or("loginctl failed").to_string();
+        // 255: ssh itself failed, so `loginctl` never ran.
+        if output.status.code() == Some(255) {
+            bail!("{message}");
+        }
+        bail!("{message} (an administrator can run `sudo loginctl {verb} <your user>` there)");
     }
     Ok(())
 }
@@ -1105,6 +1112,12 @@ fn known_hosts_file() -> std::path::PathBuf {
     swarm_client::swarm_proto::paths::state_dir().join("hosts")
 }
 
+/// Writes `text` to `path`, readable only by this user (the hosts you use
+/// are nobody else's business).
+fn write_private(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    swarm_client::swarm_proto::paths::write_private(path, text.as_bytes())
+}
+
 pub fn known_hosts() -> Vec<String> {
     std::fs::read_to_string(known_hosts_file())
         .map(|s| s.lines().map(str::trim).filter(|l| !l.is_empty()).map(str::to_string).collect())
@@ -1119,7 +1132,7 @@ pub fn remember_host(host: &str) {
     hosts.push(host.to_string());
     let path = known_hosts_file();
     let result = std::fs::create_dir_all(path.parent().unwrap_or(&path))
-        .and_then(|_| std::fs::write(&path, hosts.join("\n") + "\n"));
+        .and_then(|_| write_private(&path, &(hosts.join("\n") + "\n")));
     if let Err(e) = result {
         log::warn!("swarm: couldn't remember host {host}: {e}");
     }
@@ -1130,7 +1143,7 @@ pub fn remember_host(host: &str) {
 pub fn forget_host(host: &str) {
     let hosts: Vec<_> = known_hosts().into_iter().filter(|h| h != host).collect();
     let text = if hosts.is_empty() { String::new() } else { hosts.join("\n") + "\n" };
-    if let Err(e) = std::fs::write(known_hosts_file(), text) {
+    if let Err(e) = write_private(&known_hosts_file(), &text) {
         log::warn!("swarm: couldn't forget host {host}: {e}");
     }
     if let Some(daemons) = daemons() {
@@ -1170,7 +1183,16 @@ pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
     let client = tokio::time::timeout(Duration::from_secs(20), daemons.client(host)).await.context("timed out")??;
     let sessions = client.list().await?;
     let info = client.daemon().clone();
-    let at_login = swarmd_command(host, &["service", "status"]).await?.contains("start mode: at-login");
+    let service = swarmd_command(host, &["service", "status"]).await?;
+    let at_login = service.contains("start mode: at-login");
+    // `swarmd service status` also says whether lingering is on (systemd hosts).
+    let linger = if service.contains("Lingering is on") {
+        Some(true)
+    } else if service.contains("Lingering is off") {
+        Some(false)
+    } else {
+        None
+    };
     let restore_after_reboot =
         swarmd_command(host, &["restore", "status"]).await.ok().map(|out| out.contains("restore after reboot: on"));
     let spill_to_disk =
@@ -1182,10 +1204,7 @@ pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
         at_login,
         restore_after_reboot,
         spill_to_disk,
-        linger: match host {
-            Some(h) => linger(h).await,
-            None => None,
-        },
+        linger: host.and(linger),
         sessions: sessions.len(),
         running: sessions.iter().filter(|s| s.is_running()).count(),
         detached: sessions.iter().filter(|s| s.is_running() && s.clients.is_empty()).count(),

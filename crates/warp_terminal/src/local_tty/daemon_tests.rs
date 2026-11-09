@@ -32,6 +32,15 @@ fn uname_maps_to_swarmd_platform_names() {
     assert_eq!(platform_from_uname("Linux aarch64\n"), "linux-aarch64");
     assert_eq!(platform_from_uname("Linux x86_64"), "linux-x86_64");
     assert_eq!(platform_from_uname("Darwin arm64"), "macos-aarch64");
+}
+
+#[test]
+fn a_hostile_uname_reply_never_names_a_local_folder() {
+    // A malicious host answers `uname` with a path.
+    let platform = platform_from_uname("../../../../../tmp/x y\n");
+    assert!(!platform.contains('/') && !platform.contains('.'), "{platform}");
+    assert!(bundled_swarmd_dir("../../../../tmp").is_none());
+    assert!(bundled_swarmd_dir(&platform).is_none());
     assert_eq!(platform_from_uname("FreeBSD amd64"), "freebsd-x86_64");
     assert_eq!(local_platform(), format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH));
 }

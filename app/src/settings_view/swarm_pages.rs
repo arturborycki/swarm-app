@@ -706,6 +706,13 @@ impl SettingsWidget for HostsWidget {
                             .into(),
                         true,
                     ));
+                } else if at_login == Some(true) {
+                    column.add_child(line(
+                        appearance,
+                        "The daemon here starts at login, so turning this off means systemd stops it, and every session, when you log out."
+                            .into(),
+                        true,
+                    ));
                 }
             }
             let (install_host, remove_host) = (row.host.clone(), row.host.clone());

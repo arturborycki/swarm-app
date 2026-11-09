@@ -234,7 +234,7 @@ impl SwarmConnect {
         let target = host.clone();
         let rx = daemons.run(async move {
             let status = daemon::daemon_status(Some(&target)).await;
-            let linger = daemon::linger(&target).await;
+            let linger = status.as_ref().ok().and_then(|s| s.linger);
             (status, linger)
         });
         let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| {
