@@ -262,7 +262,7 @@ impl SwarmConnect {
                         Some(false) => me.steps.push(Step::new(
                             Mark::Warn,
                             "Lingering is off",
-                            format!("Sessions end when you log out of {host}; run loginctl enable-linger there"),
+                            format!("Sessions may end when you log out of {host}; turn lingering on in Settings → Hosts"),
                         )),
                         None => {}
                     }

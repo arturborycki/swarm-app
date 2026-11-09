@@ -961,8 +961,10 @@ pub enum HostCheck {
 const REMOTE_BIN_DIR: &str = ".local/share/swarm/bin";
 
 async fn ssh(host: &str, command: &str) -> Result<std::process::Output> {
+    // `--`, and a check, so a host can never be read as an ssh option.
+    swarm_client::check_ssh_host(host)?;
     let output = tokio::process::Command::new("ssh")
-        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", host, command])
+        .args(["-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--", host, command])
         .stdin(std::process::Stdio::null())
         .output()
         .await
@@ -1031,10 +1033,27 @@ pub async fn linger(host: &str) -> Option<bool> {
     Some(value == "yes")
 }
 
+/// Turns lingering on or off for the ssh user on `host` (`loginctl
+/// enable-linger`), so systemd keeps their processes, sessions included,
+/// after they log out. Some hosts only let an administrator change it.
+pub async fn set_linger(host: &str, on: bool) -> Result<()> {
+    let verb = if on { "enable-linger" } else { "disable-linger" };
+    let output = ssh(host, &format!("loginctl {verb}")).await?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!(
+            "{} (an administrator can run `sudo loginctl {verb} <your user>` there)",
+            stderr.trim().lines().last().unwrap_or("loginctl failed")
+        );
+    }
+    Ok(())
+}
+
 /// `user@hostname` that ssh would use for `alias`, from `ssh -G` (reads the
 /// config only; doesn't connect).
 pub async fn ssh_destination(alias: &str) -> Option<String> {
-    let output = tokio::process::Command::new("ssh").args(["-G", alias]).output().await.ok()?;
+    swarm_client::check_ssh_host(alias).ok()?;
+    let output = tokio::process::Command::new("ssh").args(["-G", "--", alias]).output().await.ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let field = |key: &str| stdout.lines().find_map(|l| l.strip_prefix(key)).map(str::trim).map(str::to_string);
     let (user, hostname) = (field("user ")?, field("hostname ")?);
@@ -1059,7 +1078,7 @@ pub async fn install_swarmd(host: &str) -> Result<()> {
         bail!("{}", String::from_utf8_lossy(&mkdir.stderr).trim());
     }
     let status = tokio::process::Command::new("scp")
-        .args(["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10"])
+        .args(["-q", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--"])
         .args(&bins)
         .arg(format!("{host}:{staging}/"))
         .status()
@@ -1136,6 +1155,9 @@ pub struct DaemonStatus {
     /// Output beyond the in-memory buffer is kept on disk, encrypted
     /// (`swarmd spill on`); `None` when the daemon predates the feature.
     pub spill_to_disk: Option<bool>,
+    /// The host keeps the user's processes after logout (`loginctl
+    /// enable-linger`); `None` for this Mac and hosts without systemd.
+    pub linger: Option<bool>,
     pub sessions: usize,
     pub running: usize,
     pub detached: usize,
@@ -1160,6 +1182,10 @@ pub async fn daemon_status(host: Option<&str>) -> Result<DaemonStatus> {
         at_login,
         restore_after_reboot,
         spill_to_disk,
+        linger: match host {
+            Some(h) => linger(h).await,
+            None => None,
+        },
         sessions: sessions.len(),
         running: sessions.iter().filter(|s| s.is_running()).count(),
         detached: sessions.iter().filter(|s| s.is_running() && s.clients.is_empty()).count(),

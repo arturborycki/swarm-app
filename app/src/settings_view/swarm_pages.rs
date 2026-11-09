@@ -416,6 +416,7 @@ impl From<ViewHandle<DaemonPageView>> for SettingsPageViewHandle {
 #[derive(Clone, Debug)]
 pub enum HostsPageAction {
     SetAtLogin { host: String, at_login: bool },
+    SetLinger { host: String, on: bool },
     Install(String),
     Remove(String),
     Refresh,
@@ -433,6 +434,7 @@ enum HostState {
 #[derive(Default, Clone)]
 struct HostRowMouse {
     at_login: SwitchStateHandle,
+    linger: SwitchStateHandle,
     install: MouseStateHandle,
     remove: MouseStateHandle,
 }
@@ -549,6 +551,12 @@ impl TypedActionView for HostsPageView {
                 self.run_task(host, note, async move { daemon::set_start_at_login(Some(&target), at_login).await }, ctx);
             }
             #[cfg(unix)]
+            HostsPageAction::SetLinger { host, on } => {
+                let (target, on) = (host.clone(), *on);
+                let note = if on { "Turning lingering on…" } else { "Turning lingering off…" };
+                self.run_task(host, note, async move { daemon::set_linger(&target, on).await }, ctx);
+            }
+            #[cfg(unix)]
             HostsPageAction::Install(host) => {
                 let target = host.clone();
                 let running = self
@@ -601,7 +609,7 @@ impl SettingsWidget for HostsWidget {
     type View = HostsPageView;
 
     fn search_terms(&self) -> &str {
-        "hosts remote ssh servers swarmd install reinstall start at login remove"
+        "hosts remote ssh servers swarmd install reinstall start at login remove lingering logout"
     }
 
     fn render(&self, view: &HostsPageView, appearance: &Appearance, _app: &AppContext) -> Box<dyn Element> {
@@ -666,6 +674,39 @@ impl SettingsWidget for HostsWidget {
                     appearance,
                     None,
                 ));
+            }
+            let linger = match &row.state {
+                Load::Ready(HostState::Ready(status)) => status.linger,
+                _ => None,
+            };
+            if let Some(on) = linger {
+                let host = row.host.clone();
+                let busy = row.busy;
+                let switch = appearance
+                    .ui_builder()
+                    .switch(row.mouse.linger.clone())
+                    .check(on)
+                    .build()
+                    .on_click(move |ctx, _, _| {
+                        if !busy {
+                            ctx.dispatch_typed_action(HostsPageAction::SetLinger { host: host.clone(), on: !on })
+                        }
+                    })
+                    .finish();
+                column.add_child(build_toggle_element(
+                    line(appearance, "Keep sessions running after I log out (lingering)".into(), false),
+                    switch,
+                    appearance,
+                    None,
+                ));
+                if !on {
+                    column.add_child(line(
+                        appearance,
+                        "Off: systemd may end your sessions when your last login to this host ends, for example when your Mac sleeps."
+                            .into(),
+                        true,
+                    ));
+                }
             }
             let (install_host, remove_host) = (row.host.clone(), row.host.clone());
             column.add_child(buttons_row(vec![
