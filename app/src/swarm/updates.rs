@@ -114,14 +114,22 @@ fn newer_release(body: &str, current: &str) -> Result<Option<Update>> {
     if latest.compare(ours) != Cmp::Gt {
         return Ok(None);
     }
+    // The app opens or downloads this link: only ever https.
+    let https = |url: &str| url.starts_with("https://");
     let dmg = format!("Swarm-{version}.dmg");
     let Some(asset) = release.assets.into_iter().find(|a| a.name == dmg) else {
+        if !https(&release.html_url) {
+            bail!("the release feed's link isn't https");
+        }
         return Ok(Some(Update { version, url: release.html_url, signed: None }));
     };
     let signed = match (asset.sha256, asset.signature) {
         (Some(sha256), Some(signature)) => Some(Signed { sha256: sha256.to_ascii_lowercase(), signature }),
         _ => None,
     };
+    if !https(&asset.browser_download_url) {
+        bail!("the release feed's download link isn't https");
+    }
     Ok(Some(Update { version, url: asset.browser_download_url, signed }))
 }
 
@@ -149,7 +157,7 @@ mod tests {
     fn signed_dmg_carries_its_hash_and_signature() {
         let body = release(
             "v0.2.0",
-            r#"{"name": "Swarm-0.2.0.dmg", "browser_download_url": "u", "sha256": "ABC1", "signature": "c2ln"}"#,
+            r#"{"name": "Swarm-0.2.0.dmg", "browser_download_url": "https://example.com/u", "sha256": "ABC1", "signature": "c2ln"}"#,
         );
         let update = newer_release(&body, "0.1.0").unwrap().unwrap();
         assert_eq!(update.signed, Some(Signed { sha256: "abc1".into(), signature: "c2ln".into() }));
