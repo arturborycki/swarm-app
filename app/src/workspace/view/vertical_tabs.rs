@@ -2096,7 +2096,11 @@ fn render_groups(
                 // This Mac's sessions are listed under their own header, like a
                 // host group, as in the sidebar mockup.
                 let follows_group = i == 0 || workspace.tabs[visible_tabs[i - 1].0].group_id.is_some();
-                if follows_group && !crate::swarm::pane_group_is_remote(tab.pane_group.as_ref(app), app) {
+                // (With grouping on, they're in the This Mac group instead.)
+                if follows_group
+                    && !FeatureFlag::GroupedTabs.is_enabled()
+                    && !crate::swarm::pane_group_is_remote(tab.pane_group.as_ref(app), app)
+                {
                     let run_len = visible_tabs[i..]
                         .iter()
                         .take_while(|(idx, _)| workspace.tabs[*idx].group_id.is_none())
@@ -2695,8 +2699,11 @@ fn render_tab_group_internal(
         // Only lock the drag to the vertical axis when cross-window tab drag is
         // disabled. When it is enabled, the user needs to be able to drag
         // horizontally out of the panel to detach the tab into a new window.
-        let draggable = if FeatureFlag::DragTabsToWindows.is_enabled()
-            && !crate::swarm::pane_group_is_remote(pane_group, app)
+        // In Swarm any session can be dragged out of the sidebar, to drop it
+        // beside the open session.
+        let draggable = if crate::swarm::SWARM_CHROME
+            || (FeatureFlag::DragTabsToWindows.is_enabled()
+                && !crate::swarm::pane_group_is_remote(pane_group, app))
         {
             draggable
         } else {
@@ -2961,11 +2968,16 @@ fn render_grouped_tabs_header(
         mouse_states.chevron.clone(),
         Some(WorkspaceAction::ToggleTabGroupCollapsed(group_id)),
     );
-    let swatch_fill: WarpThemeFill = group
-        .color
-        .resolve(None)
-        .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into())
-        .unwrap_or_else(|| internal_colors::fg_overlay_4(theme));
+    let swatch_fill: WarpThemeFill = if group.name.as_deref() == Some(crate::swarm::THIS_MAC_GROUP) {
+        // This Mac wears the accent, as its sessions' marks do.
+        theme.accent()
+    } else {
+        group
+            .color
+            .resolve(None)
+            .map(|c| c.to_ansi_color(&theme.terminal_colors().normal).into())
+            .unwrap_or_else(|| internal_colors::fg_overlay_4(theme))
+    };
     let swatch = ConstrainedBox::new(
         Container::new(Empty::new().finish())
             .with_background(swatch_fill)

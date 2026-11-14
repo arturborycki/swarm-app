@@ -172,6 +172,39 @@ pub fn pane_group_is_remote(pane_group: &crate::pane_group::PaneGroup, app: &war
     }
 }
 
+/// The name of the sidebar group that holds the sessions on this Mac.
+pub const THIS_MAC_GROUP: &str = "This Mac";
+
+/// Whether a tab is known to hold only sessions on this Mac. Unlike
+/// `!pane_group_is_remote`, a session whose host isn't known yet (still
+/// connecting) doesn't count.
+pub fn pane_group_is_local(pane_group: &crate::pane_group::PaneGroup, app: &warpui::AppContext) -> bool {
+    #[cfg(unix)]
+    {
+        let views = pane_group.terminal_views(app);
+        !views.is_empty()
+            && views.iter().all(|view| {
+                view.as_ref(app)
+                    .active_block_session_id()
+                    .and_then(|id| warp_terminal::local_tty::daemon::session_is_remote(id.as_u64()))
+                    == Some(false)
+            })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (pane_group, app);
+        false
+    }
+}
+
+/// The remote hosts Swarm has connected to: their tab groups are named after them.
+pub fn remote_host_names() -> Vec<String> {
+    #[cfg(unix)]
+    return warp_terminal::local_tty::daemon::known_hosts();
+    #[cfg(not(unix))]
+    Vec::new()
+}
+
 /// How the daemon session behind a terminal ended ("exit 1", "signal 9"),
 /// when it ended with an error that the user didn't cause by terminating it:
 /// its tab then stays open, showing that with Restart and Close.
