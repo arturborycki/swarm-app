@@ -5315,6 +5315,19 @@ impl PaneGroup {
         }
     }
 
+    /// swarm-term: puts a pane moved from another tab on the given side of
+    /// `base` (of all this tab's panes when `None`), and focuses it.
+    pub fn add_moved_pane(
+        &mut self,
+        pane: Box<dyn AnyPaneContent>,
+        direction: Direction,
+        base: Option<PaneId>,
+        ctx: &mut ViewContext<Self>,
+    ) -> Option<PaneId> {
+        let base = base.filter(|id| self.visible_pane_ids().contains(id));
+        self.add_pane(direction, base, pane, true, ctx)
+    }
+
     pub fn add_pane_as_hidden(
         &mut self,
         pane: Box<dyn AnyPaneContent>,

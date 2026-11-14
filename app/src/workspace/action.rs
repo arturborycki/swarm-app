@@ -133,6 +133,12 @@ pub enum WorkspaceAction {
     SwarmReattach(crate::swarm::ReattachTab),
     /// swarm-term: show (or hide) the connect sheet.
     SwarmShowConnect,
+    /// swarm-term: shows the session(s) of tab `tab_index` beside the active
+    /// tab's, split on the side `direction`; the tab they leave closes.
+    SwarmSplitWithTab {
+        tab_index: usize,
+        direction: crate::pane_group::Direction,
+    },
     /// swarm-term: open the connect sheet checking this host.
     SwarmConnectHost(String),
     /// swarm-term: start a session on a host (`None`: this Mac) and open it.
@@ -958,6 +964,7 @@ impl WorkspaceAction {
             | MoveTabRight(_)
             | DropTab
             | DropGroup
+            | SwarmSplitWithTab { .. }
             | RenameTab(_)
             | ResetTabName(_)
             | RenamePane(_)

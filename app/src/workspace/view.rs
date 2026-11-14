@@ -1152,6 +1152,9 @@ pub struct Workspace {
     #[cfg(unix)]
     swarm_connect: ViewHandle<crate::swarm::connect::SwarmConnect>,
     show_swarm_connect: bool,
+    /// swarm-term: while a sidebar session is dragged over the open session,
+    /// the session and the side it would be split onto.
+    swarm_split_drop: Option<SwarmSplitDrop>,
     theme_creator_modal: ViewHandle<ThemeCreatorModal>,
     theme_deletion_modal: ViewHandle<ThemeDeletionModal>,
     suggested_agent_mode_workflow_modal: ViewHandle<SuggestedAgentModeWorkflowModal>,
@@ -2759,6 +2762,7 @@ impl Workspace {
                 me.notify_swarm_attention(title.clone(), body.clone(), ctx);
             }
             me.sync_swarm_tab_names(ctx);
+            me.settle_swarm_local_tabs(ctx);
             #[cfg(target_os = "macos")]
             {
                 let count = crate::swarm::sessions::SwarmSessions::as_ref(ctx).attention_count();
@@ -3570,6 +3574,7 @@ impl Workspace {
             #[cfg(unix)]
             swarm_connect: Self::build_swarm_connect(ctx),
             show_swarm_connect: false,
+            swarm_split_drop: None,
             is_user_menu_open: false,
             tab_bar_pinned_by_popup: false,
             user_menu,
@@ -6505,8 +6510,13 @@ impl Workspace {
     /// Opens `tab`'s session as a tab, in the tab group it was in.
     fn add_swarm_tab(&mut self, tab: &crate::swarm::ReattachTab, ctx: &mut ViewContext<Self>) {
         let grouped = FeatureFlag::GroupedTabs.is_enabled();
-        // Remote sessions without a group of their own are grouped by host.
-        let group_key = tab.group.clone().or_else(|| tab.host.clone());
+        // Remote sessions without a group of their own are grouped by host,
+        // local ones under This Mac.
+        let group_key = tab
+            .group
+            .clone()
+            .or_else(|| tab.host.clone())
+            .or_else(|| crate::swarm::SWARM_CHROME.then(|| crate::swarm::THIS_MAC_GROUP.to_string()));
         let in_host_group = grouped && tab.host.is_some() && group_key == tab.host;
         // Under its host's group header, an unnamed session shows its shell's
         // title rather than repeating the host.
@@ -6564,6 +6574,13 @@ impl Workspace {
                 }
                 self.tabs[index].group_id = Some(group.id);
                 self.tab_groups.insert(group.id, group);
+                // This Mac comes first; another new group goes after the others.
+                let to = if key == crate::swarm::THIS_MAC_GROUP {
+                    self.clamp_to_unpinned_region(&self.tabs, 0)
+                } else {
+                    self.tabs.len()
+                };
+                self.move_tab_to_index(index, to, ctx);
             }
         }
     }
@@ -8717,6 +8734,135 @@ impl Workspace {
             == 1
     }
 
+    /// swarm-term: moves the session(s) of tab `source` into the active tab,
+    /// beside its own, so several sessions show at once. The tab they leave
+    /// closes once it is empty; the sessions keep running throughout.
+    fn swarm_split_with_tab(
+        &mut self,
+        source: usize,
+        direction: pane_group::Direction,
+        base: Option<PaneId>,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let target = self.active_tab_index;
+        if source == target || source >= self.tabs.len() {
+            return;
+        }
+        let source_group = self.tabs[source].pane_group.clone();
+        let target_group = self.tabs[target].pane_group.clone();
+        let pane_ids = source_group.as_ref(ctx).visible_pane_ids();
+        // Each moved pane goes beside the last one placed, so a tab of
+        // several panes keeps them together on the chosen side.
+        let mut base = base;
+        for pane_id in pane_ids {
+            let Some(pane) =
+                source_group.update(ctx, |group, ctx| group.remove_pane_for_move(&pane_id, ctx))
+            else {
+                continue;
+            };
+            if let Some(added) =
+                target_group.update(ctx, |group, ctx| group.add_moved_pane(pane, direction, base, ctx))
+            {
+                base = Some(added);
+            }
+        }
+        if let Some(index) = self.tabs.iter().position(|tab| tab.pane_group.id() == target_group.id()) {
+            self.activate_tab_internal(index, ctx);
+        }
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// swarm-term: where a sidebar session dragged to `position` would be
+    /// split in: the session pane under the pointer, on its edge nearest the
+    /// pointer. Near the outer edge of the open session it takes that whole
+    /// side instead.
+    fn swarm_split_drop_target(
+        &self,
+        tab_index: usize,
+        position: RectF,
+        window_id: WindowId,
+        ctx: &AppContext,
+    ) -> Option<SwarmSplitDrop> {
+        const OUTER_EDGE: f32 = 28.;
+        if tab_index == self.active_tab_index {
+            return None;
+        }
+        let content = ctx.element_position_by_id_at_last_frame(window_id, SWARM_ACTIVE_CONTENT_POSITION_ID)?;
+        let point = position.center();
+        if !content.contains_point(point) || content.width() <= 0. || content.height() <= 0. {
+            return None;
+        }
+        let near_outer_edge = point.x() - content.min_x() < OUTER_EDGE
+            || content.max_x() - point.x() < OUTER_EDGE
+            || point.y() - content.min_y() < OUTER_EDGE
+            || content.max_y() - point.y() < OUTER_EDGE;
+        let pane_ids = self.tabs[self.active_tab_index].pane_group.as_ref(ctx).visible_pane_ids();
+        let (pane, rect) = if near_outer_edge || pane_ids.len() < 2 {
+            (None, content)
+        } else {
+            pane_ids
+                .into_iter()
+                .find_map(|pane_id| {
+                    ctx.element_position_by_id_at_last_frame(window_id, pane_id.position_id())
+                        .filter(|rect| rect.contains_point(point) && rect.width() > 0. && rect.height() > 0.)
+                        .map(|rect| (Some(pane_id), rect))
+                })
+                .unwrap_or((None, content))
+        };
+        let x = (point.x() - rect.min_x()) / rect.width();
+        let y = (point.y() - rect.min_y()) / rect.height();
+        let (_, direction) = [
+            (x, pane_group::Direction::Left),
+            (1. - x, pane_group::Direction::Right),
+            (y, pane_group::Direction::Up),
+            (1. - y, pane_group::Direction::Down),
+        ]
+        .into_iter()
+        .min_by(|a, b| a.0.total_cmp(&b.0))?;
+        let half = match direction {
+            pane_group::Direction::Left => RectF::new(rect.origin(), vec2f(rect.width() / 2., rect.height())),
+            pane_group::Direction::Right => RectF::new(
+                rect.origin() + vec2f(rect.width() / 2., 0.),
+                vec2f(rect.width() / 2., rect.height()),
+            ),
+            pane_group::Direction::Up => RectF::new(rect.origin(), vec2f(rect.width(), rect.height() / 2.)),
+            pane_group::Direction::Down => RectF::new(
+                rect.origin() + vec2f(0., rect.height() / 2.),
+                vec2f(rect.width(), rect.height() / 2.),
+            ),
+        };
+        Some(SwarmSplitDrop {
+            tab_index,
+            direction,
+            pane,
+            hint: RectF::new(half.origin() - content.origin(), half.size()),
+        })
+    }
+
+    /// swarm-term: a session's right-click menu offers to show it beside the
+    /// active session.
+    fn swarm_split_menu_items(&self, tab_index: usize) -> Vec<MenuItem<WorkspaceAction>> {
+        if !crate::swarm::SWARM_CHROME || tab_index == self.active_tab_index {
+            return Vec::new();
+        }
+        let mut items: Vec<MenuItem<WorkspaceAction>> = [
+            ("Open in Split Right", pane_group::Direction::Right),
+            ("Open in Split Left", pane_group::Direction::Left),
+            ("Open in Split Down", pane_group::Direction::Down),
+            ("Open in Split Up", pane_group::Direction::Up),
+        ]
+        .into_iter()
+        .map(|(label, direction)| {
+            MenuItemFields::new(label)
+                .with_on_select_action(WorkspaceAction::SwarmSplitWithTab { tab_index, direction })
+                .into_item()
+        })
+        .collect();
+        items.push(MenuItem::Separator);
+        items
+    }
+
     pub fn toggle_tab_right_click_menu(
         &mut self,
         tab_index: usize,
@@ -8733,7 +8879,8 @@ impl Workspace {
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
         let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
         let is_only_member_of_group = self.tab_is_only_member_of_its_group(tab_index);
-        let menu_items = {
+        let mut menu_items = self.swarm_split_menu_items(tab_index);
+        menu_items.extend({
             let tab = &self.tabs[tab_index];
             tab.menu_items(
                 tab_index,
@@ -8744,7 +8891,7 @@ impl Workspace {
                 can_move_right,
                 ctx,
             )
-        };
+        });
         ctx.update_view(&self.tab_right_click_menu, |context_menu, view_ctx| {
             context_menu.set_items(menu_items, view_ctx);
         });
@@ -8820,8 +8967,9 @@ impl Workspace {
         let can_move_left = self.can_move_tab(tab_index, TabMovement::Left);
         let can_move_right = self.can_move_tab(tab_index, TabMovement::Right);
         let is_only_member_of_group = self.tab_is_only_member_of_its_group(tab_index);
+        let mut menu_items = self.swarm_split_menu_items(tab_index);
         let tab = &self.tabs[tab_index];
-        let menu_items = tab.menu_items_with_pane_name_target(
+        menu_items.extend(tab.menu_items_with_pane_name_target(
             tab_index,
             self.tabs.len(),
             &self.tab_groups,
@@ -8830,7 +8978,7 @@ impl Workspace {
             can_move_right,
             Some(pane_name_target),
             ctx,
-        );
+        ));
 
         ctx.update_view(&self.tab_right_click_menu, |context_menu, view_ctx| {
             context_menu.set_items(menu_items, view_ctx);
@@ -13726,6 +13874,16 @@ impl Workspace {
             None
         };
 
+        // swarm-term: a new tab is a session on this Mac, so it never joins a
+        // remote host's group, nor stays outside any: it goes to the end of
+        // the This Mac group (`add_tab_with_pane_layout` makes that group when
+        // there is none yet).
+        if swarm_groups_this_mac()
+            && active_group_id.is_none_or(|g| self.is_swarm_host_group(g, &crate::swarm::remote_host_names()))
+        {
+            return (self.this_mac_insert_index(None, ctx), self.this_mac_group_id());
+        }
+
         match TabSettings::as_ref(ctx).new_tab_placement {
             // End of the bar, outside any group.
             NewTabPlacement::AfterAllTabs => (self.tab_count(), None),
@@ -13741,6 +13899,98 @@ impl Workspace {
                 };
                 (insert_idx, active_group_id)
             }
+        }
+    }
+
+    /// Whether a tab group is a remote host's group in the Swarm sidebar:
+    /// those are named after the host.
+    fn is_swarm_host_group(&self, group_id: TabGroupId, hosts: &[String]) -> bool {
+        self.tab_groups
+            .get(&group_id)
+            .and_then(|group| group.name.as_deref())
+            .is_some_and(|name| hosts.iter().any(|h| h == name))
+    }
+
+    /// The sidebar's This Mac group, which holds the sessions on this Mac
+    /// that aren't in a group of the user's own.
+    fn this_mac_group_id(&self) -> Option<TabGroupId> {
+        self.tab_groups
+            .values()
+            .find(|group| group.name.as_deref() == Some(crate::swarm::THIS_MAC_GROUP))
+            .map(|group| group.id)
+    }
+
+    /// The This Mac group, made when there is none yet.
+    fn ensure_this_mac_group(&mut self) -> TabGroupId {
+        if let Some(id) = self.this_mac_group_id() {
+            return id;
+        }
+        let mut group = TabGroup::new();
+        group.name = Some(crate::swarm::THIS_MAC_GROUP.to_string());
+        let id = group.id;
+        self.tab_groups.insert(id, group);
+        id
+    }
+
+    /// Where a session on this Mac goes in the tab list: after the This Mac
+    /// group's last member (other than `except`), else after the last
+    /// ungrouped local tab, else first.
+    fn this_mac_insert_index(&self, except: Option<usize>, ctx: &AppContext) -> usize {
+        let this_mac = self.this_mac_group_id();
+        let last_member = this_mac.and_then(|id| {
+            self.tabs
+                .iter()
+                .enumerate()
+                .rposition(|(index, tab)| Some(index) != except && tab.group_id == Some(id))
+        });
+        let last_local = last_member.or_else(|| {
+            self.tabs.iter().enumerate().rposition(|(index, tab)| {
+                Some(index) != except
+                    && tab.group_id.is_none()
+                    && !crate::swarm::pane_group_is_remote(tab.pane_group.as_ref(ctx), ctx)
+            })
+        });
+        let index = last_local.map_or(0, |index| index + 1);
+        self.clamp_to_unpinned_region(&self.tabs, index)
+    }
+
+    /// Puts sessions on this Mac that are in no group, or in a remote host's
+    /// group, into the This Mac group. (Older versions put a new tab in the
+    /// active tab's group, so a local session opened while a remote one was
+    /// active joined its host.) Sessions in the user's own groups stay put.
+    fn settle_swarm_local_tabs(&mut self, ctx: &mut ViewContext<Self>) {
+        if !swarm_groups_this_mac() {
+            return;
+        }
+        let this_mac = self.this_mac_group_id();
+        let mut hosts: Option<Vec<String>> = None;
+        let mut moved = false;
+        loop {
+            let misplaced = self.tabs.iter().position(|tab| {
+                let out_of_place = match tab.group_id {
+                    None => true,
+                    Some(group) if Some(group) == this_mac => false,
+                    Some(group) => self.is_swarm_host_group(
+                        group,
+                        hosts.get_or_insert_with(crate::swarm::remote_host_names),
+                    ),
+                };
+                out_of_place && crate::swarm::pane_group_is_local(tab.pane_group.as_ref(ctx), ctx)
+            });
+            let Some(index) = misplaced else { break };
+            let previous = self.tabs[index].group_id.take();
+            let this_mac = self.ensure_this_mac_group();
+            let target = self.this_mac_insert_index(Some(index), ctx);
+            self.tabs[index].group_id = Some(this_mac);
+            self.move_tab_to_index(index, target, ctx);
+            if let Some(previous) = previous {
+                self.prune_empty_tab_group(previous, ctx);
+            }
+            moved = true;
+        }
+        if moved {
+            ctx.dispatch_global_action("workspace:save_app", ());
+            ctx.notify();
         }
     }
 
@@ -13801,6 +14051,16 @@ impl Workspace {
             .push(self.tabs[insert_idx].pane_group.id());
         self.activate_tab_internal(insert_idx, ctx);
 
+        // swarm-term: a new session on this Mac starts the This Mac group when
+        // there is none yet (see `new_tab_index_and_group`).
+        let inherited_group_id = if swarm_groups_this_mac()
+            && is_new_terminal
+            && inherited_group_id.is_none()
+        {
+            Some(self.ensure_this_mac_group())
+        } else {
+            inherited_group_id
+        };
         // Inherit the active tab's group membership (skipped for top-level tabs).
         if let Some(group_id) = inherited_group_id {
             let new_idx = self.active_tab_index;
@@ -23321,6 +23581,25 @@ impl Workspace {
         } else {
             ChildView::new(&active_tab_data.pane_group).finish()
         };
+        // swarm-term: a session dragged from the sidebar onto the open one is
+        // shown beside it; the side it would take is highlighted.
+        let active_content = if crate::swarm::SWARM_CHROME {
+            let mut stack = Stack::new().with_child(active_content);
+            if let Some(drop) = self.swarm_split_drop {
+                stack.add_positioned_child(
+                    render_swarm_split_drop_hint(drop.hint.size(), appearance),
+                    OffsetPositioning::offset_from_parent(
+                        drop.hint.origin(),
+                        ParentOffsetBounds::Unbounded,
+                        ParentAnchor::TopLeft,
+                        ChildAnchor::TopLeft,
+                    ),
+                );
+            }
+            SavePosition::new(stack.finish(), SWARM_ACTIVE_CONTENT_POSITION_ID).finish()
+        } else {
+            active_content
+        };
 
         let banners: Vec<_> = [
             self.maybe_render_workspace_banner(app, appearance),
@@ -26345,6 +26624,7 @@ impl TypedActionView for Workspace {
                 tab_position,
             } => self.on_tab_drag(*tab_index, *tab_position, ctx),
             DropTab => {
+                let swarm_split_drop = self.swarm_split_drop.take();
                 let is_cross_window = CrossWindowTabDrag::as_ref(ctx).is_active();
                 let handed_off_tab_index =
                     CrossWindowTabDrag::as_ref(ctx)
@@ -26383,6 +26663,9 @@ impl TypedActionView for Workspace {
                     // from `Workspace::on_window_closed` once the source /
                     // preview window actually closes. See the field doc on
                     // `CrossWindowTabDrag::pending_source_window_closes`.
+                }
+                if let Some(drop) = swarm_split_drop {
+                    self.swarm_split_with_tab(drop.tab_index, drop.direction, drop.pane, ctx);
                 }
             }
             CopyAccessTokenToClipboard => {
@@ -26550,6 +26833,11 @@ impl TypedActionView for Workspace {
             SwarmShowPicker => {
                 #[cfg(unix)]
                 self.toggle_swarm_picker(ctx);
+            }
+            SwarmSplitWithTab { tab_index, direction } => {
+                // From the menu: split the session pane in focus.
+                let focused = self.tabs[self.active_tab_index].pane_group.as_ref(ctx).focused_pane_id(ctx);
+                self.swarm_split_with_tab(*tab_index, *direction, Some(focused), ctx);
             }
             SwarmShowConnect => {
                 #[cfg(unix)]
@@ -29920,6 +30208,24 @@ impl Workspace {
         if current_index >= self.tabs.len() {
             return;
         }
+        // swarm-term: over the open session, a dragged sidebar session is
+        // dropped beside it (see `swarm_split_with_tab`) rather than reordered
+        // or torn off into a window of its own.
+        if crate::swarm::SWARM_CHROME && !CrossWindowTabDrag::as_ref(ctx).is_active() {
+            let target = self.swarm_split_drop_target(current_index, position, ctx.window_id(), ctx);
+            let changed = match (self.swarm_split_drop, target) {
+                (None, None) => false,
+                (Some(a), Some(b)) => a.pane != b.pane || a.hint != b.hint,
+                _ => true,
+            };
+            self.swarm_split_drop = target;
+            if changed {
+                ctx.notify();
+            }
+            if target.is_some() {
+                return;
+            }
+        }
         // Only detach when the drag leaves the active tab presentation on its
         // perpendicular axis. `tab_bar_rects_for_window` returns just the rect
         // for the layout that actually holds the tabs (the vertical panel in
@@ -30004,6 +30310,15 @@ impl Workspace {
             return;
         }
 
+        // A remote session's tab can't move to another window (its in-band
+        // command channel stays with this one); in Swarm it may still be
+        // dragged out of the sidebar, to drop it beside the open session.
+        if crate::swarm::SWARM_CHROME
+            && is_drag_outside_tab_bar
+            && crate::swarm::pane_group_is_remote(self.tabs[current_index].pane_group.as_ref(ctx), ctx)
+        {
+            return;
+        }
         let source_is_single_tab = self.tabs.len() == 1;
         if (is_drag_outside_tab_bar || source_is_single_tab)
             && FeatureFlag::DragTabsToWindows.is_enabled()
@@ -31158,4 +31473,40 @@ fn swarm_tab_bar_divider(appearance: &Appearance) -> Box<dyn Element> {
     )
     .with_horizontal_padding(4.)
     .finish()
+}
+
+/// swarm-term: where the open session is drawn, for dropping a session
+/// dragged from the sidebar beside it.
+const SWARM_ACTIVE_CONTENT_POSITION_ID: &str = "swarm_active_tab_content";
+
+/// swarm-term: a sidebar session being dragged over the open session: where
+/// it would be split in.
+#[derive(Clone, Copy)]
+struct SwarmSplitDrop {
+    tab_index: usize,
+    direction: pane_group::Direction,
+    /// The session pane split; `None` splits the whole open session.
+    pane: Option<PaneId>,
+    /// The area the dropped session would take, relative to the open session.
+    hint: RectF,
+}
+
+/// swarm-term: the area a dragged session would take.
+fn render_swarm_split_drop_hint(size: Vector2F, appearance: &Appearance) -> Box<dyn Element> {
+    let theme = appearance.theme();
+    let hint = Container::new(Empty::new().finish())
+        .with_background(internal_colors::accent_overlay_1(theme))
+        .with_border(Border::all(2.).with_border_fill(theme.accent()))
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(8.)))
+        .finish();
+    ConstrainedBox::new(Container::new(hint).with_uniform_padding(4.).finish())
+        .with_width(size.x())
+        .with_height(size.y())
+        .finish()
+}
+
+/// swarm-term: whether the sidebar keeps the sessions on this Mac in a This
+/// Mac group. (Off in unit tests, which cover Warp's own tab grouping.)
+fn swarm_groups_this_mac() -> bool {
+    crate::swarm::SWARM_CHROME && FeatureFlag::GroupedTabs.is_enabled() && !cfg!(test)
 }
