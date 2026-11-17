@@ -26219,6 +26219,9 @@ impl TypedActionView for Workspace {
             }
             DropGroup => {
                 send_telemetry_from_ctx!(TelemetryEvent::DragAndDropTabGroup, ctx);
+                if let Some(drop) = self.swarm_split_drop.take() {
+                    self.swarm_split_with_tab(drop.tab_index, drop.direction, drop.pane, ctx);
+                }
                 ctx.notify();
             }
             OpenWarpDrive => {
@@ -30951,6 +30954,25 @@ impl Workspace {
         let Some((first, last)) = group_member_index_range(&self.tabs, group_id) else {
             return;
         };
+        // swarm-term: a group of one session dragged over the open session
+        // drops that session beside it, as a dragged session row does (see
+        // `on_tab_drag`).
+        if crate::swarm::SWARM_CHROME && first == last {
+            let pointer = RectF::new(cursor_position, Vector2F::zero());
+            let target = self.swarm_split_drop_target(first, pointer, ctx.window_id(), ctx);
+            let changed = match (self.swarm_split_drop, target) {
+                (None, None) => false,
+                (Some(a), Some(b)) => a.pane != b.pane || a.hint != b.hint,
+                _ => true,
+            };
+            self.swarm_split_drop = target;
+            if changed {
+                ctx.notify();
+            }
+            if target.is_some() {
+                return;
+            }
+        }
         // Reorders that would carry the block across the pinned/unpinned
         // boundary are skipped below: a pinned group must stay in the pinned
         // prefix and an unpinned group must stay out of it.

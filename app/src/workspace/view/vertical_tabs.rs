@@ -3363,10 +3363,15 @@ fn render_grouped_tab_container(
     let skip_group_draggable = is_any_pane_dragging;
     let is_this_group_dragging = group.draggable_state.is_dragging();
     let group_draggable_state = group.draggable_state.clone();
+    // swarm-term: a group of one session drags as a block (see
+    // `is_sole_group_member`), so in Swarm it may also leave the sidebar, to
+    // drop that session beside the open one.
+    let free_group_drag =
+        crate::swarm::SWARM_CHROME && super::group_has_single_member(&workspace.tabs, group_id);
     let positioned_container: Box<dyn Element> = if skip_group_draggable {
         container
     } else {
-        Draggable::new(group_draggable_state.clone(), container)
+        let draggable = Draggable::new(group_draggable_state.clone(), container)
             .on_drag_start(move |ctx, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::StartGroupDrag(group_id));
             })
@@ -3382,8 +3387,13 @@ fn render_grouped_tab_container(
             })
             .on_drop(move |ctx, _, _, _| {
                 ctx.dispatch_typed_action(WorkspaceAction::DropGroup);
-            })
-            .with_drag_axis(DragAxis::VerticalOnly)
+            });
+        let draggable = if free_group_drag {
+            draggable
+        } else {
+            draggable.with_drag_axis(DragAxis::VerticalOnly)
+        };
+        draggable
             // Yield to a nested per-tab `Draggable` when it claims the mouse-down.
             // This allows dragging a tab within a group, without triggering the groups `Draggable`.
             .with_defer_to_handled_child_mouse_down()
