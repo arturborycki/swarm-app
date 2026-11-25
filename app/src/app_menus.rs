@@ -625,6 +625,9 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
                 MenuItem::Separator,
                 swarm_workspace_item_with_key("Navigate Back", WorkspaceAction::SwarmNavigateBack, Some("ctrl-cmd-[")),
                 swarm_workspace_item_with_key("Navigate Forward", WorkspaceAction::SwarmNavigateForward, Some("ctrl-cmd-]")),
+                MenuItem::Separator,
+                swarm_workspace_item_with_key("Insert Path…", WorkspaceAction::SwarmInsertPath, Some("shift-cmd-i")),
+                swarm_workspace_item_with_key("Quick Look Selection", WorkspaceAction::SwarmQuickLook, Some("shift-cmd-y")),
             ],
         );
         // Pane housekeeping, before closing tabs.

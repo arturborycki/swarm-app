@@ -27127,7 +27127,7 @@ impl TerminalView {
         self.cursor_position_id.clone()
     }
 
-    fn drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
+    pub(crate) fn drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
         self.is_file_drop_target = false;
         if paths.is_empty() {
             return;

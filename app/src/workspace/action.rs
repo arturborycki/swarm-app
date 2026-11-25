@@ -151,6 +151,11 @@ pub enum WorkspaceAction {
     SwarmForwardPort { host: String, port: u16 },
     /// swarm-term: end a port forward.
     SwarmStopForward { host: String, port: u16 },
+    /// swarm-term: choose files and type their paths into the focused session.
+    SwarmInsertPath,
+    /// swarm-term: preview the selected path with Quick Look (or open a
+    /// selected link).
+    SwarmQuickLook,
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
     /// swarm-term: replace the ended daemon session behind this Warp session
@@ -1188,6 +1193,8 @@ impl WorkspaceAction {
             | SwarmShowSession(_)
             | SwarmForwardPort { .. }
             | SwarmStopForward { .. }
+            | SwarmInsertPath
+            | SwarmQuickLook
             | SwarmRetryConnections
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
