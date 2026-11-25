@@ -464,6 +464,17 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             WorkspaceAction::ToggleVerticalTabsPanel,
             Some("ctrl-cmd-s"),
         ));
+        // A floating terminal over everything, shown and hidden from here:
+        // the hotkey window, whose tabs are daemon sessions like any others.
+        items.push(MenuItem::Custom(CustomMenuItem::new(
+            "Scratch Terminal",
+            |ctx| {
+                let handles = crate::GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
+                ctx.dispatch_global_action("root_view:toggle_quake_mode_window", &handles);
+            },
+            |_props, _ctx| MenuItemPropertyChanges::default(),
+            Keystroke::parse("alt-cmd-t").ok(),
+        )));
         items.push(swarm_workspace_item_with_key(
             "Show Activity",
             WorkspaceAction::SwarmToggleActivity,
