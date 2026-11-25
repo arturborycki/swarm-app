@@ -27315,6 +27315,13 @@ impl TerminalView {
         // Focus this pane when files are dropped on it.
         self.redetermine_global_focus(ctx);
 
+        // swarm-term: a session on another host can't read this Mac's files: send them there.
+        #[cfg(unix)]
+        if let Some(host) = self.swarm_remote_host(ctx) {
+            self.swarm_upload_and_insert(host, paths, ctx);
+            return;
+        }
+
         // Check if we're in a long-running command
         let is_in_long_running_command = self
             .model
@@ -27403,6 +27410,41 @@ impl TerminalView {
                 warpui::clipboard_utils::escaped_paths_str(paths, Some(self.shell_family(ctx)));
             self.typed_characters_on_terminal(&input, ctx);
         }
+    }
+
+    /// swarm-term: the host this view's daemon session runs on, if it isn't this Mac.
+    #[cfg(unix)]
+    fn swarm_remote_host(&self, ctx: &AppContext) -> Option<String> {
+        let id = self.active_block_session_id()?.as_u64();
+        crate::swarm::sessions::SwarmSessions::as_ref(ctx).session_for(id).and_then(|(host, _)| host)
+    }
+
+    /// swarm-term: copies `paths` to `host` (under `~/.cache/swarm/uploads/`) and types where
+    /// they landed, as dropping them on a local session types their paths.
+    #[cfg(unix)]
+    fn swarm_upload_and_insert(&mut self, host: String, paths: &[String], ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let local: Vec<std::path::PathBuf> = paths.iter().map(std::path::PathBuf::from).collect();
+        let count = local.len();
+        let toast_id = format!("swarm-upload-{}", self.view_id);
+        let window_id = ctx.window_id();
+        let text = format!("Sending {} to {host}…", if count == 1 { "1 file".to_string() } else { format!("{count} files") });
+        let toast = DismissibleToast::new(text, ToastFlavor::Default).with_object_id(toast_id.clone());
+        ToastStack::handle(ctx).update(ctx, |stack, ctx| stack.add_persistent_toast(toast, window_id, ctx));
+        let target = host.clone();
+        let rx = daemons.run(async move { daemon::upload_files(&target, &local).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| {
+            ToastStack::handle(ctx).update(ctx, |stack, ctx| stack.remove_toast_by_identifier(toast_id, window_id, ctx));
+            match result {
+                Ok(Ok(remote)) => {
+                    let input = warpui::clipboard_utils::escaped_paths_str(&remote, Some(ShellFamily::Posix));
+                    me.typed_characters_on_terminal(&input, ctx);
+                }
+                Ok(Err(e)) => me.show_error_toast(format!("Couldn't send the files to {host}: {e:#}"), ctx),
+                Err(_) => {}
+            }
+        });
     }
 
     pub fn initiate_ssh_file_upload(&self, paths: &[String], ctx: &mut ViewContext<Self>) {

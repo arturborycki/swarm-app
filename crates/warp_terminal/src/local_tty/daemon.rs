@@ -1370,6 +1370,37 @@ pub async fn install_swarmd(host: &str) -> Result<()> {
     Ok(())
 }
 
+/// Where files sent to a host's sessions go, under the remote home folder.
+const REMOTE_UPLOAD_DIR: &str = ".cache/swarm/uploads";
+
+/// Copies `paths` (files or folders on this Mac) to a new folder under `~/.cache/swarm/uploads/`
+/// on `host` with the user's own ssh setup, and returns where each one landed there.
+pub async fn upload_files(host: &str, paths: &[std::path::PathBuf]) -> Result<Vec<String>> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_millis()).unwrap_or(0);
+    let dir = format!("{REMOTE_UPLOAD_DIR}/{stamp}");
+    let mkdir = ssh(host, &format!("mkdir -p \"$HOME/{dir}\" && printf %s \"$HOME\"")).await?;
+    if !mkdir.status.success() {
+        bail!("{}", String::from_utf8_lossy(&mkdir.stderr).trim());
+    }
+    let home = String::from_utf8_lossy(&mkdir.stdout).trim().to_string();
+    let status = tokio::process::Command::new("scp")
+        .args(["-q", "-r", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10", "--"])
+        .args(paths)
+        .arg(format!("{host}:{dir}/"))
+        .stdin(std::process::Stdio::null())
+        .status()
+        .await
+        .context("run scp")?;
+    if !status.success() {
+        bail!("copying to {host} failed ({status})");
+    }
+    Ok(paths
+        .iter()
+        .filter_map(|p| p.file_name())
+        .map(|name| format!("{home}/{dir}/{}", name.to_string_lossy()))
+        .collect())
+}
+
 /// Swarm's state dir (`SWARM_STATE_DIR` or the platform default).
 pub fn state_dir() -> std::path::PathBuf {
     swarm_client::swarm_proto::paths::state_dir()
