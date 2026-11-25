@@ -2433,6 +2433,11 @@ impl FeaturesPageView {
                 FeaturesPageAction::QuakeEditorSetPinPosition(QuakeModePinPosition::Right),
             );
 
+            let center = DropdownItem::new(
+                "Center of screen",
+                FeaturesPageAction::QuakeEditorSetPinPosition(QuakeModePinPosition::Center),
+            );
+
             // Note that the index here has to correspond to the ordering of the items.
             let selected_index = match KeysSettings::as_ref(ctx)
                 .quake_mode_settings
@@ -2442,8 +2447,9 @@ impl FeaturesPageView {
                 QuakeModePinPosition::Bottom => 1,
                 QuakeModePinPosition::Left => 2,
                 QuakeModePinPosition::Right => 3,
+                QuakeModePinPosition::Center => 4,
             };
-            dropdown.add_items(vec![top, bottom, left, right], ctx);
+            dropdown.add_items(vec![top, bottom, left, right, center], ctx);
 
             dropdown.set_selected_by_index(selected_index, ctx);
             dropdown

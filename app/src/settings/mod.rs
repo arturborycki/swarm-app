@@ -192,6 +192,13 @@ lazy_static! {
                     width: 40,
                     height: 100
                 }
+            ),
+            (
+                QuakeModePinPosition::Center,
+                SizePercentages {
+                    width: 60,
+                    height: 55
+                }
             )
         ]);
 }
@@ -463,6 +470,14 @@ impl QuakeModeSettings {
                     display_bounds.upper_right().x() - quake_window_size.x(),
                     display_bounds.origin().y() + y_axis_offset,
                 );
+
+                RectF::new(quake_window_origin, quake_window_size)
+            }
+            QuakeModePinPosition::Center => {
+                // Centered on both axes, a little above the middle like a panel.
+                let x_axis_offset = (display_bounds.size().x() - quake_window_size.x()) / 2.;
+                let y_axis_offset = (display_bounds.size().y() - quake_window_size.y()) * 0.4;
+                let quake_window_origin = display_bounds.origin() + Vector2F::new(x_axis_offset, y_axis_offset);
 
                 RectF::new(quake_window_origin, quake_window_size)
             }

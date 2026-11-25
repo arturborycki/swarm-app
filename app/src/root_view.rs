@@ -247,11 +247,14 @@ enum QuakeModeMoveTrigger {
     rename_all = "snake_case"
 )]
 pub enum QuakeModePinPosition {
-    #[default]
     Top,
     Bottom,
     Left,
     Right,
+    /// swarm-term: a floating panel in the middle of the screen (the Scratch
+    /// Terminal's default) instead of a strip along an edge.
+    #[default]
+    Center,
 }
 
 pub struct OpenFromRestoredArg {
