@@ -715,6 +715,9 @@ pub(super) struct VerticalTabsPanelState {
     new_tab_hover_state: MouseStateHandle,
     new_tab_button_state: MouseStateHandle,
     pub(super) search_query: String,
+    /// swarm-term: the sidebar lists only sessions with something to report
+    /// (Activity, ⌘.).
+    pub(super) activity_only: bool,
     settings_button_mouse_state: MouseStateHandle,
     panes_segment_mouse_state: MouseStateHandle,
     tabs_segment_mouse_state: MouseStateHandle,
@@ -753,6 +756,7 @@ impl Default for VerticalTabsPanelState {
             new_tab_hover_state: Default::default(),
             new_tab_button_state: Default::default(),
             search_query: String::new(),
+            activity_only: false,
             settings_button_mouse_state: Default::default(),
             panes_segment_mouse_state: Default::default(),
             tabs_segment_mouse_state: Default::default(),
@@ -1205,6 +1209,21 @@ impl VerticalTabsPanelState {
     /// the tabs `render_groups` renders — otherwise the panel would show tabs
     /// the next/previous-tab keybindings refuse to visit.
     pub(super) fn matching_tab_indices(
+        &self,
+        tabs: &[TabData],
+        tab_groups: &HashMap<TabGroupId, TabGroup>,
+        active_tab_index: usize,
+        app: &AppContext,
+    ) -> Vec<usize> {
+        let mut indices = self.tab_indices_matching_query(tabs, tab_groups, active_tab_index, app);
+        // Keep in step with `render_groups`.
+        if self.activity_only {
+            indices.retain(|&index| swarm_tab_has_activity(&tabs[index], app));
+        }
+        indices
+    }
+
+    fn tab_indices_matching_query(
         &self,
         tabs: &[TabData],
         tab_groups: &HashMap<TabGroupId, TabGroup>,
@@ -1725,7 +1744,7 @@ fn render_vertical_tabs_panel(
         .with_main_axis_size(MainAxisSize::Max)
         .with_cross_axis_alignment(CrossAxisAlignment::Stretch);
     if crate::swarm::SWARM_CHROME {
-        panel_content.add_child(render_swarm_panel_header(workspace, appearance));
+        panel_content.add_child(render_swarm_panel_header(state, workspace, appearance, app));
     }
     panel_content.add_child(render_control_bar(
         state,
@@ -1803,20 +1822,127 @@ fn render_vertical_tabs_panel(
 }
 
 /// swarm-term: "SESSIONS · 5 OPEN" over the filter field (sidebar mockup).
-fn render_swarm_panel_header(workspace: &Workspace, appearance: &Appearance) -> Box<dyn Element> {
+fn render_swarm_panel_header(
+    state: &VerticalTabsPanelState,
+    workspace: &Workspace,
+    appearance: &Appearance,
+    app: &AppContext,
+) -> Box<dyn Element> {
     let theme = appearance.theme();
-    let label = format!("SESSIONS  ·  {} OPEN", workspace.tabs.len());
+    let font = appearance.ui_font_family();
+    let label = if state.activity_only {
+        swarm_activity_summary(workspace, app)
+    } else {
+        format!("SESSIONS  ·  {} OPEN", workspace.tabs.len())
+    };
+    let title = Text::new_inline(label, font, 11.)
+        .with_color(theme.sub_text_color(theme.background()).into())
+        .with_style(Properties::default().weight(Weight::Semibold))
+        .with_clip(ClipConfig::ellipsis())
+        .finish();
+    // The Activity toggle (⌘.): highlighted while the sidebar shows only
+    // sessions with something to report.
+    let on = state.activity_only;
+    let accent = theme.accent();
+    let text_color = if on { theme.main_text_color(theme.background()) } else { theme.sub_text_color(theme.background()) };
+    let toggle = Hoverable::new(workspace.mouse_states.swarm_sidebar_activity_button.clone(), move |hover| {
+        let background = match (on, hover.is_hovered()) {
+            (true, false) => accent.with_opacity(30),
+            (true, true) => accent.with_opacity(45),
+            (false, true) => internal_colors::fg_overlay_2(theme),
+            (false, false) => WarpThemeFill::Solid(ColorU::transparent_black()),
+        };
+        Container::new(
+            Text::new_inline("ACTIVITY".to_string(), font, 10.)
+                .with_color(text_color.into())
+                .with_style(Properties::default().weight(Weight::Semibold))
+                .finish(),
+        )
+        .with_padding_left(6.)
+        .with_padding_right(6.)
+        .with_padding_top(2.)
+        .with_padding_bottom(2.)
+        .with_background(background)
+        .with_corner_radius(CornerRadius::with_all(Radius::Pixels(4.)))
+        .finish()
+    })
+    .with_cursor(Cursor::PointingHand)
+    .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmToggleActivity))
+    .finish();
     Container::new(
-        Text::new_inline(label, appearance.ui_font_family(), 11.)
-            .with_color(theme.sub_text_color(theme.background()).into())
-            .with_style(Properties::default().weight(Weight::Semibold))
+        Flex::row()
+            .with_main_axis_size(MainAxisSize::Max)
+            .with_cross_axis_alignment(CrossAxisAlignment::Center)
+            .with_child(Shrinkable::new(1., title).finish())
+            .with_child(toggle)
             .finish(),
     )
     .with_padding_left(12.)
-    .with_padding_right(12.)
-    .with_padding_top(10.)
+    .with_padding_right(8.)
+    .with_padding_top(8.)
     .with_padding_bottom(2.)
     .finish()
+}
+
+/// swarm-term: what the Activity header says: "ACTIVITY · 2 NEED YOU · 1 DONE".
+fn swarm_activity_summary(workspace: &Workspace, app: &AppContext) -> String {
+    let (mut need, mut done, mut working, mut unread) = (0, 0, 0, 0);
+    #[cfg(unix)]
+    {
+        use crate::swarm::sessions::SessionMark;
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(app);
+        for tab in &workspace.tabs {
+            for view in tab.pane_group.as_ref(app).terminal_views(app) {
+                let Some(status) = view.as_ref(app).active_block_session_id().and_then(|id| sessions.status_for(id.as_u64()))
+                else {
+                    continue;
+                };
+                match status.mark {
+                    SessionMark::Blocked | SessionMark::Attention => need += 1,
+                    SessionMark::Done => done += 1,
+                    _ if status.program.is_some() => working += 1,
+                    _ if status.unseen || status.marked_unread => unread += 1,
+                    _ => {}
+                }
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (workspace, app);
+    let mut parts = vec!["ACTIVITY".to_string()];
+    for (n, what) in [(need, "NEED YOU"), (done, "DONE"), (working, "WORKING"), (unread, "UNREAD")] {
+        if n > 0 {
+            parts.push(format!("{n} {what}"));
+        }
+    }
+    parts.join("  ·  ")
+}
+
+/// swarm-term: whether a session in `tab` has something to report: its
+/// program needs the user, failed, finished or reports work, or it has
+/// unread output.
+fn swarm_tab_has_activity(tab: &TabData, app: &AppContext) -> bool {
+    #[cfg(unix)]
+    {
+        use crate::swarm::sessions::SessionMark;
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(app);
+        tab.pane_group.as_ref(app).terminal_views(app).iter().any(|view| {
+            view.as_ref(app)
+                .active_block_session_id()
+                .and_then(|id| sessions.status_for(id.as_u64()))
+                .is_some_and(|status| {
+                    matches!(status.mark, SessionMark::Blocked | SessionMark::Attention | SessionMark::Done)
+                        || status.program.is_some()
+                        || status.unseen
+                        || status.marked_unread
+                })
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (tab, app);
+        false
+    }
 }
 
 /// swarm-term: the sidebar's footer: "N detached" (while sessions run with
@@ -2052,7 +2178,27 @@ fn render_groups(
         merge_group_name_matches(&tab_group_ids, &matched_groups, own_matches)
     };
 
+    // swarm-term: Activity lists only sessions with something to report.
+    let visible_tabs: Vec<(usize, Option<Vec<PaneId>>)> = if state.activity_only {
+        visible_tabs.into_iter().filter(|(index, _)| swarm_tab_has_activity(&workspace.tabs[*index], app)).collect()
+    } else {
+        visible_tabs
+    };
+
     if visible_tabs.is_empty() {
+        if state.activity_only {
+            return Container::new(
+                Text::new_inline(
+                    "Nothing needs you right now. ⌘. shows every session.",
+                    appearance.ui_font_family(),
+                    12.,
+                )
+                .with_color(theme.sub_text_color(theme.background()).into())
+                .finish(),
+            )
+            .with_padding(Padding::uniform(12.))
+            .finish();
+        }
         if query.is_empty() {
             return Empty::new().finish();
         } else {

@@ -274,6 +274,32 @@ pub fn init(app: &mut AppContext) {
     .with_key_binding("ctrl-v")
     .with_context_predicate(id!("Terminal") & !id!("IMEOpen"))]);
 
+    // swarm-term: copy mode's keys, only while it's on.
+    {
+        let copy_mode = || id!("Terminal") & !id!("IMEOpen") & id!("SwarmCopyMode");
+        let mut bindings = Vec::new();
+        for (keys, direction) in [
+            (["h", "left"], SelectionDirection::Left),
+            (["l", "right"], SelectionDirection::Right),
+            (["k", "up"], SelectionDirection::Up),
+            (["j", "down"], SelectionDirection::Down),
+        ] {
+            for key in keys {
+                bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeMove(direction.clone()), copy_mode()));
+            }
+        }
+        for key in ["v", "space"] {
+            bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeToggleSelect, copy_mode()));
+        }
+        for key in ["y", "enter", "cmd-c"] {
+            bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeYank, copy_mode()));
+        }
+        for key in ["escape", "q"] {
+            bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeExit, copy_mode()));
+        }
+        app.register_fixed_bindings(bindings);
+    }
+
     app.register_fixed_bindings([
         FixedBinding::new(
             "shift-left",

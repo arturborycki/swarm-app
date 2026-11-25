@@ -6918,10 +6918,108 @@ impl Workspace {
     /// Starts a login shell on `host` and opens it; Warp's setup is typed into it.
     #[cfg(unix)]
     fn new_swarm_session(&mut self, host: Option<String>, ctx: &mut ViewContext<Self>) {
+        self.new_swarm_session_in(host, None, ctx);
+    }
+
+    /// Opens a file picker and types the chosen paths (quoted for the shell,
+    /// as dropping files does) into the focused session.
+    fn swarm_insert_path(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
+        ctx.open_file_picker(
+            move |result, ctx| {
+                let Ok(paths) = result else { return };
+                if paths.is_empty() {
+                    return;
+                }
+                view.update(ctx, |view, ctx| view.drag_and_drop_files(&paths, ctx));
+                ctx.focus(&view);
+            },
+            FilePickerConfiguration::new().allow_folder().allow_multi_select(),
+        );
+    }
+
+    /// Previews the path selected in the focused session with Quick Look
+    /// (relative paths are read against the session's folder), or opens a
+    /// selected link. Files on remote hosts can't be previewed here.
+    fn swarm_quick_look(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
+        let selected = view.as_ref(ctx).selected_text(ctx).map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
+        let Some(text) = selected else {
+            self.swarm_alert("Nothing selected".to_string(), "Select a file path or a link, then choose Quick Look.".to_string(), ctx);
+            return;
+        };
+        if text.starts_with("http://") || text.starts_with("https://") {
+            ctx.open_url(&text);
+            return;
+        }
+        #[cfg(unix)]
+        {
+            let session = view
+                .as_ref(ctx)
+                .active_block_session_id()
+                .and_then(|id| crate::swarm::sessions::SwarmSessions::as_ref(ctx).session_for(id.as_u64()))
+                .map(|(host, s)| (host, s.cwd.clone()));
+            if let Some((Some(host), _)) = &session {
+                self.swarm_alert(
+                    "Quick Look shows files on this Mac".to_string(),
+                    format!("{text} is on {host}. Forward it or open it there."),
+                    ctx,
+                );
+                return;
+            }
+            let cwd = session.and_then(|(_, cwd)| cwd);
+            match resolve_selected_path(&text, cwd.as_deref()) {
+                Some(path) => {
+                    let _ = std::process::Command::new("/usr/bin/qlmanage")
+                        .args(["-p", &path])
+                        .stdin(std::process::Stdio::null())
+                        .stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null())
+                        .spawn();
+                }
+                None => self.swarm_alert("No such file".to_string(), format!("{text} isn't a file or folder on this Mac."), ctx),
+            }
+        }
+    }
+
+    /// Forwards `port` on `host` to this Mac in the background, then opens it
+    /// in the browser.
+    #[cfg(unix)]
+    fn swarm_forward_port(&mut self, host: String, port: u16, ctx: &mut ViewContext<Self>) {
         use warp_terminal::local_tty::daemon;
         let Some(daemons) = daemon::daemons() else { return };
         let target = host.clone();
-        let rx = daemons.run(async move { daemon::create_session(target.as_deref(), 120, 40).await });
+        let rx = daemons.run(async move {
+            tokio::task::spawn_blocking(move || {
+                daemon::forward_port(&target, port).map(|local| (local, daemon::forwarded_port_answers(local)))
+            })
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+        });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+            Ok(Ok((local, true))) => ctx.open_url(&format!("http://localhost:{local}")),
+            // The tunnel is up but nothing serves on the host's port yet: say so
+            // rather than open a browser page that can't connect.
+            Ok(Ok((local, false))) => me.swarm_alert(
+                format!("Nothing is listening on port {port} on {host}"),
+                format!(
+                    "The forward is open. Start the server on {host}, then open http://localhost:{local}. \
+                     Stop it from Go to Anything (⌘P)."
+                ),
+                ctx,
+            ),
+            Ok(Err(e)) => me.swarm_alert(format!("Couldn't forward port {port} from {host}"), format!("{e:#}"), ctx),
+            Err(_) => {}
+        });
+    }
+
+    /// Starts a session on `host` in folder `cwd` (else its home) and opens it.
+    #[cfg(unix)]
+    fn new_swarm_session_in(&mut self, host: Option<String>, cwd: Option<String>, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let target = host.clone();
+        let rx = daemons.run(async move { daemon::create_session_in(target.as_deref(), cwd, 120, 40).await });
         let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
             Ok(Ok(session)) => {
                 let tab = crate::swarm::ReattachTab::for_session(host.as_deref(), &session);
@@ -27057,6 +27155,16 @@ impl TypedActionView for Workspace {
                 pane_group.update(ctx, |pg, ctx| pg.balance_panes(ctx));
             }
             SwarmMovePaneToNewTab => self.swarm_move_pane_to_new_tab(ctx),
+            SwarmToggleActivity => {
+                let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
+                if !sidebar_shown {
+                    self.toggle_vertical_tabs_panel(ctx);
+                    self.vertical_tabs_panel.activity_only = true;
+                } else {
+                    self.vertical_tabs_panel.activity_only = !self.vertical_tabs_panel.activity_only;
+                }
+                ctx.notify();
+            }
             SwarmSplitWithTab { tab_index, direction } => {
                 // From the menu: split the session pane in focus.
                 let focused = self.tabs[self.active_tab_index].pane_group.as_ref(ctx).focused_pane_id(ctx);
@@ -27077,6 +27185,53 @@ impl TypedActionView for Workspace {
             SwarmNewSession { host } => {
                 #[cfg(unix)]
                 self.new_swarm_session(host.clone(), ctx);
+            }
+            SwarmNewSessionIn { host, cwd } => {
+                #[cfg(unix)]
+                self.new_swarm_session_in(host.clone(), Some(cwd.clone()), ctx);
+                #[cfg(not(unix))]
+                let _ = (host, cwd);
+            }
+            SwarmForwardPort { host, port } => {
+                #[cfg(unix)]
+                self.swarm_forward_port(host.clone(), *port, ctx);
+                #[cfg(not(unix))]
+                let _ = (host, port);
+            }
+            SwarmStopForward { host, port } => {
+                #[cfg(unix)]
+                warp_terminal::local_tty::daemon::stop_port_forward(host, *port);
+                #[cfg(not(unix))]
+                let _ = (host, port);
+            }
+            SwarmInsertPath => self.swarm_insert_path(ctx),
+            SwarmCopyMode => {
+                if let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) {
+                    if view.as_ref(ctx).model.lock().is_alt_screen_active() {
+                        self.swarm_alert(
+                            "Copy mode isn't available here".to_string(),
+                            "A full-screen program is showing, and it keeps its own scrollback. Copy mode works on regular command output.".to_string(),
+                            ctx,
+                        );
+                    } else {
+                        view.update(ctx, |view, ctx| view.swarm_copy_mode_enter(ctx));
+                        ctx.focus(&view);
+                    }
+                }
+            }
+            SwarmQuickLook => self.swarm_quick_look(ctx),
+            SwarmShowSession(warp_session_id) => {
+                let found = self.tabs.iter().enumerate().find_map(|(index, tab)| {
+                    let views = tab.pane_group.as_ref(ctx).terminal_views(ctx);
+                    let view = views.iter().find(|v| {
+                        v.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) == Some(*warp_session_id)
+                    })?;
+                    Some((index, view.clone()))
+                });
+                if let Some((index, view)) = found {
+                    self.activate_tab(index, ctx);
+                    ctx.focus(&view);
+                }
             }
             SwarmReattach(tab) => {
                 self.add_swarm_tab(tab, ctx);
@@ -31698,6 +31853,21 @@ fn swarm_tab_bar_host_label(name: &str, swatch: Fill, appearance: &Appearance) -
 }
 
 /// swarm-term: the tab strip under the title row while the sidebar is hidden.
+/// swarm-term: a selected path as a file or folder on this Mac: `~` expands
+/// to the home folder and a relative path is read against `cwd`; `None` if
+/// nothing is there. Quotes around the selection are dropped.
+fn resolve_selected_path(text: &str, cwd: Option<&str>) -> Option<String> {
+    let text = text.trim_matches(|c| c == '"' || c == '\'');
+    let path = if let Some(rest) = text.strip_prefix('~') {
+        format!("{}{rest}", std::env::var("HOME").ok()?)
+    } else if text.starts_with('/') {
+        text.to_string()
+    } else {
+        format!("{}/{text}", cwd?)
+    };
+    std::path::Path::new(&path).exists().then_some(path)
+}
+
 /// swarm-term: how many tabs Navigate Back remembers.
 const SWARM_NAV_HISTORY: usize = 50;
 /// swarm-term: how long a tab must be shown to count as a Back step: longer

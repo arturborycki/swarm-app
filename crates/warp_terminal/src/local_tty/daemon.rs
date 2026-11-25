@@ -1073,6 +1073,111 @@ pub enum HostCheck {
 
 const REMOTE_BIN_DIR: &str = ".local/share/swarm/bin";
 
+/// Port forwards this app runs: (host, remote port) → (local port, the ssh
+/// process). Each ends when the app quits (see [`forward_port`]).
+static FORWARDS: LazyLock<Mutex<HashMap<(String, u16), (u16, std::process::Child)>>> = LazyLock::new(Default::default);
+
+/// Whether something answers at the far end of the forward on `local`: ssh
+/// accepts the connection here, then closes it within a round trip when
+/// nothing listens on the host's port. A server that waits for a request, as
+/// web servers do, keeps it open and counts as answering.
+pub fn forwarded_port_answers(local: u16) -> bool {
+    use std::io::Read;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, local));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
+    let mut byte = [0u8; 1];
+    match stream.read(&mut byte) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    }
+}
+
+/// Forwards `remote_port` on `host` to a port on this Mac (the same number if
+/// it's free, else any free one) with `ssh -N -L`, using the user's own ssh
+/// config and keys, and returns the local port. Waits a moment to report a
+/// tunnel that fails at once (port in use there, host unreachable). The
+/// tunnel ends when the app quits: ssh runs under a shell that kills it once
+/// the app's end of its standard input closes.
+pub fn forward_port(host: &str, remote_port: u16) -> Result<u16> {
+    swarm_client::check_ssh_host(host)?;
+    let key = (host.to_string(), remote_port);
+    {
+        let mut forwards = FORWARDS.lock().unwrap();
+        if let Some((local, child)) = forwards.get_mut(&key) {
+            if matches!(child.try_wait(), Ok(None)) {
+                return Ok(*local);
+            }
+            forwards.remove(&key);
+        }
+    }
+    let local = free_local_port(remote_port)?;
+    let spec = format!("127.0.0.1:{local}:localhost:{remote_port}");
+    let mut child = std::process::Command::new("/bin/sh")
+        .args([
+            "-c",
+            // A background job's input is /dev/null in `sh -c`, so the app's
+            // pipe goes to the watcher on fd 3. ssh ending on its own ends
+            // the shell (and the watcher) at once.
+            r#"exec 3<&0; ssh -N -o BatchMode=yes -o ConnectTimeout=10 -o ExitOnForwardFailure=yes -o ControlPath=none -L "$1" -- "$2" </dev/null & p=$!; (read _ <&3; kill $p 2>/dev/null) & r=$!; wait $p; kill $r 2>/dev/null"#,
+            "sh",
+            &spec,
+            host,
+        ])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .context("run ssh")?;
+    // A tunnel that can't be set up ends within moments.
+    for _ in 0..15 {
+        std::thread::sleep(Duration::from_millis(100));
+        if let Some(status) = child.try_wait().context("check ssh")? {
+            let mut err = String::new();
+            if let Some(mut stderr) = child.stderr.take() {
+                let _ = std::io::Read::read_to_string(&mut stderr, &mut err);
+            }
+            let err = err.trim();
+            bail!("ssh ended ({status}){}", if err.is_empty() { String::new() } else { format!(": {err}") });
+        }
+    }
+    FORWARDS.lock().unwrap().insert(key, (local, child));
+    log::info!("swarm: forwarding {host}:{remote_port} to localhost:{local}");
+    Ok(local)
+}
+
+/// `preferred` if nothing on this Mac listens on it, else a free port.
+fn free_local_port(preferred: u16) -> Result<u16> {
+    if std::net::TcpListener::bind(("127.0.0.1", preferred)).is_ok() {
+        return Ok(preferred);
+    }
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).context("find a free port")?;
+    Ok(listener.local_addr()?.port())
+}
+
+/// The forwards running now: (host, remote port, local port).
+pub fn port_forwards() -> Vec<(String, u16, u16)> {
+    let mut forwards = FORWARDS.lock().unwrap();
+    forwards.retain(|_, (_, child)| matches!(child.try_wait(), Ok(None)));
+    let mut list: Vec<_> = forwards.iter().map(|((h, r), (l, _))| (h.clone(), *r, *l)).collect();
+    list.sort();
+    list
+}
+
+/// Ends the forward of `remote_port` on `host`.
+pub fn stop_port_forward(host: &str, remote_port: u16) {
+    if let Some((_, mut child)) = FORWARDS.lock().unwrap().remove(&(host.to_string(), remote_port)) {
+        // Closing its input makes the shell end ssh; then reap it.
+        drop(child.stdin.take());
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+    }
+}
+
 async fn ssh(host: &str, command: &str) -> Result<std::process::Output> {
     // `--`, and a check, so a host can never be read as an ssh option.
     swarm_client::check_ssh_host(host)?;
@@ -1457,13 +1562,19 @@ pub async fn list_sessions(host: Option<&str>) -> Result<Vec<DaemonSession>> {
 
 /// Starts a login shell on `host`, marked as this app's and to reopen.
 pub async fn create_session(host: Option<&str>, cols: u16, rows: u16) -> Result<DaemonSession> {
+    create_session_in(host, None, cols, rows).await
+}
+
+/// Like [`create_session`], starting in folder `cwd` (on `host`); a folder
+/// that doesn't exist there falls back to the home folder.
+pub async fn create_session_in(host: Option<&str>, cwd: Option<String>, cols: u16, rows: u16) -> Result<DaemonSession> {
     let daemons = daemons().context("daemon sessions are off")?;
     let mut ui = BTreeMap::new();
     ui.insert(META_CREATED_BY.to_string(), "warp".to_string());
     ui.insert(META_AUTO_ATTACH.to_string(), "true".to_string());
     let opts = CreateOpts {
         command: Vec::new(),
-        cwd: None,
+        cwd,
         env: Vec::new(),
         size: Size { cols: cols.max(1), rows: rows.max(1) },
         name: None,

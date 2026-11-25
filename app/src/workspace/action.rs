@@ -143,6 +143,21 @@ pub enum WorkspaceAction {
     SwarmConnectHost(String),
     /// swarm-term: start a session on a host (`None`: this Mac) and open it.
     SwarmNewSession { host: Option<String> },
+    /// swarm-term: start a session in folder `cwd` on a host and open it.
+    SwarmNewSessionIn { host: Option<String>, cwd: String },
+    /// swarm-term: show the tab holding this Warp session, and focus it.
+    SwarmShowSession(u64),
+    /// swarm-term: forward a port on a host to this Mac and open it.
+    SwarmForwardPort { host: String, port: u16 },
+    /// swarm-term: end a port forward.
+    SwarmStopForward { host: String, port: u16 },
+    /// swarm-term: choose files and type their paths into the focused session.
+    SwarmInsertPath,
+    /// swarm-term: copy mode in the focused session (keyboard selection).
+    SwarmCopyMode,
+    /// swarm-term: preview the selected path with Quick Look (or open a
+    /// selected link).
+    SwarmQuickLook,
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
     /// swarm-term: replace the ended daemon session behind this Warp session
@@ -167,6 +182,9 @@ pub enum WorkspaceAction {
     SwarmBalanceSplits,
     /// swarm-term: move the focused pane to a new tab after this one.
     SwarmMovePaneToNewTab,
+    /// swarm-term: the sidebar lists only sessions with something to report,
+    /// or every session again.
+    SwarmToggleActivity,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1173,6 +1191,13 @@ impl WorkspaceAction {
             | SwarmShowConnect
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
+            | SwarmNewSessionIn { .. }
+            | SwarmShowSession(_)
+            | SwarmForwardPort { .. }
+            | SwarmStopForward { .. }
+            | SwarmInsertPath
+            | SwarmCopyMode
+            | SwarmQuickLook
             | SwarmRetryConnections
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
@@ -1184,6 +1209,7 @@ impl WorkspaceAction {
             | SwarmCloseOtherPanes
             | SwarmBalanceSplits
             | SwarmMovePaneToNewTab
+            | SwarmToggleActivity
             | Reauth
             | SignupAnonymousUser
             | LogOut

@@ -2914,6 +2914,8 @@ pub struct TerminalView {
     ignore_next_set_title_event: bool,
 
     cli_subagent_views: HashMap<BlockId, ViewHandle<CLISubagentView>>,
+    /// swarm-term: copy mode is on; `true` once `v` started a selection.
+    swarm_copy_mode: Option<bool>,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     use_agent_footer: ViewHandle<UseAgentToolbar>,
 
@@ -4521,6 +4523,7 @@ impl TerminalView {
             terminal_title: Default::default(),
             ignore_next_set_title_event: false,
             cli_subagent_views: Default::default(),
+            swarm_copy_mode: None,
             cli_subagent_controller,
             use_agent_footer: use_agent_button_bar,
             agent_view_controller,
@@ -23961,6 +23964,75 @@ impl TerminalView {
         }
     }
 
+    /// swarm-term: enters copy mode with a one-cell cursor on the last line
+    /// of output (or keeps an existing selection to extend it). Full-screen
+    /// programs draw on a screen without this, so it stays off there.
+    pub(crate) fn swarm_copy_mode_enter(&mut self, ctx: &mut ViewContext<Self>) {
+        let mut model = self.model.lock();
+        if model.is_alt_screen_active() {
+            return;
+        }
+        let block_list = model.block_list_mut();
+        if block_list.selection().is_some() {
+            drop(model);
+            self.swarm_copy_mode = Some(true);
+            ctx.notify();
+            return;
+        }
+        let start = (0..block_list.blocks().len()).rev().find_map(|i| {
+            let index = BlockIndex(i);
+            let grid = block_list.block_at(index)?.output_grid();
+            if grid.is_empty() {
+                return None;
+            }
+            let end = grid.end_point();
+            let point = crate::terminal::model::terminal_model::WithinBlock::new(
+                Point::new(end.row, 0),
+                index,
+                GridType::Output,
+            );
+            Some(BlockListPoint::from_within_block_point(&point, block_list))
+        });
+        let Some(start) = start else { return };
+        block_list.start_selection(start, SelectionType::Simple, Side::Left);
+        block_list.update_selection(start, Side::Right);
+        drop(model);
+        self.swarm_copy_mode = Some(false);
+        self.scroll_to_row_if_not_visible((start.row - 0.5.into_lines()).into_lines(), ctx);
+        ctx.notify();
+    }
+
+    /// swarm-term: moves copy mode's cursor (or, while selecting, the
+    /// selection's end) one cell or line.
+    fn swarm_copy_mode_move(&mut self, direction: &SelectionDirection, ctx: &mut ViewContext<Self>) {
+        let Some(selecting) = self.swarm_copy_mode else { return };
+        let semantic_selection = SemanticSelection::as_ref(ctx);
+        let inverted = self.is_inverted_blocklist(ctx);
+        let tail = {
+            let mut model = self.model.lock();
+            let block_list = model.block_list_mut();
+            let tail = block_list.move_selection_tail(direction, semantic_selection, inverted);
+            if let (Some(tail), false) = (tail, selecting) {
+                // Not selecting yet: the cursor is the one cell at the tail.
+                block_list.start_selection(tail, SelectionType::Simple, Side::Left);
+                block_list.update_selection(tail, Side::Right);
+            }
+            tail
+        };
+        if let Some(tail) = tail {
+            self.scroll_to_row_if_not_visible((tail.row - 0.5.into_lines()).into_lines(), ctx);
+        }
+        ctx.notify();
+    }
+
+    /// swarm-term: leaves copy mode, clearing its cursor or selection.
+    fn swarm_copy_mode_exit(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.swarm_copy_mode.take().is_some() {
+            self.model.lock().block_list_mut().clear_selection();
+            ctx.notify();
+        }
+    }
+
     fn keyboard_select_text(
         &mut self,
         ctx: &mut ViewContext<Self>,
@@ -27127,7 +27199,7 @@ impl TerminalView {
         self.cursor_position_id.clone()
     }
 
-    fn drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
+    pub(crate) fn drag_and_drop_files(&mut self, paths: &[String], ctx: &mut ViewContext<Self>) {
         self.is_file_drop_target = false;
         if paths.is_empty() {
             return;
@@ -27889,6 +27961,11 @@ impl TypedActionView for TerminalView {
             | VimModeBanner(_)
             | SwarmRestartSession
             | SwarmCloseEndedSession
+            | SwarmCopyModeEnter
+            | SwarmCopyModeMove(_)
+            | SwarmCopyModeToggleSelect
+            | SwarmCopyModeYank
+            | SwarmCopyModeExit
             | InsertMostRecentCommandCorrection
             | StopSharingCurrentSession { .. }
             | RequestSharedSessionRole(_)
@@ -28410,6 +28487,21 @@ impl TypedActionView for TerminalView {
                 }
             }
             SwarmCloseEndedSession => self.close_ended_swarm_session(ctx),
+            SwarmCopyModeEnter => self.swarm_copy_mode_enter(ctx),
+            SwarmCopyModeMove(direction) => self.swarm_copy_mode_move(direction, ctx),
+            SwarmCopyModeToggleSelect => {
+                if let Some(selecting) = self.swarm_copy_mode.as_mut() {
+                    *selecting = !*selecting;
+                    ctx.notify();
+                }
+            }
+            SwarmCopyModeYank => {
+                if self.swarm_copy_mode.is_some() {
+                    self.copy(ctx);
+                    self.swarm_copy_mode_exit(ctx);
+                }
+            }
+            SwarmCopyModeExit => self.swarm_copy_mode_exit(ctx),
             OnboardingFlow(version) => {
                 // Don't show onboarding if it's already active or if this is a shared session or if user is anonymous
                 if self
@@ -29793,6 +29885,9 @@ impl View for TerminalView {
             context.set.insert("VoltronActive");
         }
 
+        if self.swarm_copy_mode.is_some() {
+            context.set.insert("SwarmCopyMode");
+        }
         if model_lock.block_list().selection().is_some() {
             context.set.insert("ActiveBlockTextSelection");
         }

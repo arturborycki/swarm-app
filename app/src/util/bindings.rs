@@ -282,7 +282,10 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
         CustomAction::AddNextOccurrence => Keystroke::parse("ctrl-g").ok(),
         CustomAction::AddCursorAbove => Keystroke::parse("ctrl-shift-up").ok(),
         CustomAction::AddCursorBelow => Keystroke::parse("ctrl-shift-down").ok(),
-        CustomAction::CommandPalette => Keystroke::parse(cmd_or_ctrl_shift("p")).ok(),
+        // swarm-term: ⌘P is Go to Anything (the navigation palette); commands move to ⇧⌘P.
+        CustomAction::CommandPalette => {
+            Keystroke::parse(if OperatingSystem::get().is_mac() { "cmd-shift-P" } else { "ctrl-shift-P" }).ok()
+        }
         CustomAction::AISearch => Keystroke::parse("ctrl-`").ok(),
         CustomAction::Find => Keystroke::parse(cmd_or_ctrl_shift("f")).ok(),
         CustomAction::SelectAll => Keystroke::parse("cmdorctrl-a").ok(),
@@ -348,7 +351,7 @@ pub fn custom_tag_to_keystroke(custom: CustomTag) -> Option<Keystroke> {
                 Keystroke::parse("ctrl-shift-{").ok()
             }
         }
-        CustomAction::NavigationPalette => mac_only_keystroke("cmd-shift-P"),
+        CustomAction::NavigationPalette => mac_only_keystroke("cmd-p"),
         CustomAction::LaunchConfigPalette => mac_only_keystroke("ctrl-cmd-l"),
         // swarm-term: ⌘O opens the session picker (File → Open Session…); files move to ⌥⌘O.
         CustomAction::FilesPalette if crate::swarm::SWARM_CHROME => mac_only_keystroke("cmd-alt-o"),

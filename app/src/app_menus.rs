@@ -307,10 +307,18 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             .collect();
         file_menu_options.insert(2, swarm_new_session_on_host_menu());
         file_menu_options.insert(3, swarm_workspace_item_with_key("Open Session…", WorkspaceAction::SwarmShowPicker, Some("cmd-o")));
-        // The navigation palette finds open tabs and detached sessions on every host.
+        // Go to Anything: the navigation palette finds open tabs, sessions by
+        // state, detached sessions on every host and folders for new sessions.
         file_menu_options.insert(
             4,
-            swarm_relabel(updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx), "Find Tab or Session…"),
+            swarm_workspace_item_with_key(
+                "Go to Anything…",
+                WorkspaceAction::TogglePalette {
+                    mode: crate::palette::PaletteMode::Navigation,
+                    source: crate::server::telemetry::PaletteSource::Keybinding,
+                },
+                Some("cmd-p"),
+            ),
         );
         file_menu_options.extend([
             MenuItem::Separator,
@@ -455,6 +463,22 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             "Show or Hide Sessions Sidebar",
             WorkspaceAction::ToggleVerticalTabsPanel,
             Some("ctrl-cmd-s"),
+        ));
+        // A floating terminal over everything, shown and hidden from here:
+        // the hotkey window, whose tabs are daemon sessions like any others.
+        items.push(MenuItem::Custom(CustomMenuItem::new(
+            "Scratch Terminal",
+            |ctx| {
+                let handles = crate::GlobalResourceHandlesProvider::as_ref(ctx).get().clone();
+                ctx.dispatch_global_action("root_view:toggle_quake_mode_window", &handles);
+            },
+            |_props, _ctx| MenuItemPropertyChanges::default(),
+            Keystroke::parse("alt-cmd-t").ok(),
+        )));
+        items.push(swarm_workspace_item_with_key(
+            "Show Activity",
+            WorkspaceAction::SwarmToggleActivity,
+            Some("cmd-."),
         ));
         items.push(swarm_workspace_item_with_key(
             "Filter Sessions…",
@@ -612,6 +636,10 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
                 MenuItem::Separator,
                 swarm_workspace_item_with_key("Navigate Back", WorkspaceAction::SwarmNavigateBack, Some("ctrl-cmd-[")),
                 swarm_workspace_item_with_key("Navigate Forward", WorkspaceAction::SwarmNavigateForward, Some("ctrl-cmd-]")),
+                MenuItem::Separator,
+                swarm_workspace_item_with_key("Copy Mode", WorkspaceAction::SwarmCopyMode, Some("cmd-shift-X")),
+                swarm_workspace_item_with_key("Insert Path…", WorkspaceAction::SwarmInsertPath, Some("cmd-shift-I")),
+                swarm_workspace_item_with_key("Quick Look Selection", WorkspaceAction::SwarmQuickLook, Some("cmd-shift-Y")),
             ],
         );
         // Pane housekeeping, before closing tabs.

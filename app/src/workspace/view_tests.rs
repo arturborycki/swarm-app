@@ -5852,3 +5852,17 @@ fn swarm_navigate_back_and_forward_walk_the_tabs_in_order() {
         });
     })
 }
+
+#[test]
+fn resolve_selected_path_reads_tilde_absolute_and_relative_paths() {
+    let dir = std::env::temp_dir();
+    let cwd = dir.to_str().unwrap();
+    std::fs::write(dir.join("swarm-ql-test.txt"), "x").unwrap();
+    assert!(super::resolve_selected_path("swarm-ql-test.txt", Some(cwd)).is_some());
+    assert!(super::resolve_selected_path("'swarm-ql-test.txt'", Some(cwd)).is_some(), "quotes are dropped");
+    assert!(super::resolve_selected_path("/tmp", None).is_some());
+    assert!(super::resolve_selected_path("~", None).is_some());
+    assert!(super::resolve_selected_path("relative-without-cwd", None).is_none());
+    assert!(super::resolve_selected_path("no-such-file-here", Some(cwd)).is_none());
+    let _ = std::fs::remove_file(dir.join("swarm-ql-test.txt"));
+}
