@@ -7,6 +7,7 @@
 
 #[cfg(unix)]
 pub mod connect;
+pub mod copy_motion;
 #[cfg(unix)]
 pub mod debug_info;
 #[cfg(target_os = "macos")]

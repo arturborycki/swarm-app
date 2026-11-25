@@ -2916,6 +2916,10 @@ pub struct TerminalView {
     cli_subagent_views: HashMap<BlockId, ViewHandle<CLISubagentView>>,
     /// swarm-term: copy mode is on; `true` once `v` started a selection.
     swarm_copy_mode: Option<bool>,
+    /// swarm-term: copy mode's selection takes whole lines (`V`).
+    swarm_copy_lines: bool,
+    /// swarm-term: the count typed for copy mode's next motion (0: none).
+    swarm_copy_count: usize,
     cli_subagent_controller: ModelHandle<CLISubagentController>,
     use_agent_footer: ViewHandle<UseAgentToolbar>,
 
@@ -4524,6 +4528,8 @@ impl TerminalView {
             ignore_next_set_title_event: false,
             cli_subagent_views: Default::default(),
             swarm_copy_mode: None,
+            swarm_copy_lines: false,
+            swarm_copy_count: 0,
             cli_subagent_controller,
             use_agent_footer: use_agent_button_bar,
             agent_view_controller,
@@ -24002,31 +24008,132 @@ impl TerminalView {
         ctx.notify();
     }
 
-    /// swarm-term: moves copy mode's cursor (or, while selecting, the
-    /// selection's end) one cell or line.
-    fn swarm_copy_mode_move(&mut self, direction: &SelectionDirection, ctx: &mut ViewContext<Self>) {
+    /// swarm-term: moves copy mode's cursor `count` times (the typed count, else once); while
+    /// selecting, the selection follows it.
+    fn swarm_copy_mode_motion(&mut self, motion: action::SwarmCopyMotion, ctx: &mut ViewContext<Self>) {
+        use crate::swarm::copy_motion as m;
+        use crate::terminal::model::terminal_model::WithinBlock;
+        use action::SwarmCopyMotion as M;
         let Some(selecting) = self.swarm_copy_mode else { return };
-        let semantic_selection = SemanticSelection::as_ref(ctx);
+        let count = std::mem::take(&mut self.swarm_copy_count).max(1);
         let inverted = self.is_inverted_blocklist(ctx);
-        let tail = {
+        let found = match motion {
+            M::NextMatch | M::PreviousMatch => {
+                let direction = if motion == M::NextMatch { FindDirection::Up } else { FindDirection::Down };
+                self.find_model.update(ctx, |find, ctx| {
+                    for _ in 0..count {
+                        find.focus_next_find_match(direction, ctx);
+                    }
+                });
+                match self.find_model.as_ref(ctx).focused_block_list_match() {
+                    Some(BlockListMatch::CommandBlock(found)) => {
+                        Some(WithinBlock::new(*found.range.start(), found.block_index, found.grid_type))
+                    }
+                    _ => return,
+                }
+            }
+            _ => None,
+        };
+        let lines = self.swarm_copy_lines;
+        let at = {
             let mut model = self.model.lock();
             let block_list = model.block_list_mut();
-            let tail = block_list.move_selection_tail(direction, semantic_selection, inverted);
-            if let (Some(tail), false) = (tail, selecting) {
-                // Not selecting yet: the cursor is the one cell at the tail.
-                block_list.start_selection(tail, SelectionType::Simple, Side::Left);
-                block_list.update_selection(tail, Side::Right);
+            let Some((anchor, mut cursor)) = block_list.swarm_selection_ends() else { return };
+            let same_row = |p: &WithinBlock<Point>, col: usize| WithinBlock::new(Point::new(p.get().row, col), p.block_index, p.grid);
+            // Rows searched for the next word before giving up.
+            const MAX_ROWS: usize = 2000;
+            let steps = if matches!(motion, M::HalfPageUp | M::HalfPageDown) {
+                count * (block_list.swarm_visible_rows() / 2).max(1)
+            } else {
+                count
+            };
+            for _ in 0..steps {
+                let col = cursor.get().col;
+                let row = block_list.swarm_row_chars(&cursor).unwrap_or_default();
+                let next = match motion {
+                    M::Left => col.checked_sub(1).map(|c| same_row(&cursor, c)),
+                    M::Right => (col + 1 < row.len()).then(|| same_row(&cursor, col + 1)),
+                    M::Up | M::HalfPageUp => block_list.swarm_step_row(&cursor, false, col, inverted),
+                    M::Down | M::HalfPageDown => block_list.swarm_step_row(&cursor, true, col, inverted),
+                    M::LineStart => Some(same_row(&cursor, 0)),
+                    M::FirstNonBlank => Some(same_row(&cursor, m::first_non_blank(&row))),
+                    M::LineEnd => Some(same_row(&cursor, m::last_non_blank(&row))),
+                    M::Top => block_list.swarm_edge_row(true),
+                    M::Bottom => block_list.swarm_edge_row(false),
+                    M::NextMatch | M::PreviousMatch => found.clone(),
+                    M::WordForward | M::WordEnd => {
+                        let within = if motion == M::WordForward { m::word_forward(&row, col) } else { m::word_end(&row, col) };
+                        within.map(|c| same_row(&cursor, c)).or_else(|| {
+                            let mut p = cursor.clone();
+                            (0..MAX_ROWS).find_map(|_| {
+                                p = block_list.swarm_step_row(&p, true, 0, inverted)?;
+                                let chars = block_list.swarm_row_chars(&p)?;
+                                if m::is_blank(&chars) {
+                                    return None;
+                                }
+                                let c = if motion == M::WordForward { Some(m::first_non_blank(&chars)) } else { m::first_word_end(&chars) };
+                                c.map(|c| same_row(&p, c))
+                            })
+                        })
+                    }
+                    M::WordBackward => m::word_backward(&row, col).map(|c| same_row(&cursor, c)).or_else(|| {
+                        let mut p = cursor.clone();
+                        (0..MAX_ROWS).find_map(|_| {
+                            p = block_list.swarm_step_row(&p, false, 0, inverted)?;
+                            let chars = block_list.swarm_row_chars(&p)?;
+                            m::word_backward(&chars, chars.len()).map(|c| same_row(&p, c))
+                        })
+                    }),
+                };
+                match next {
+                    Some(next) => cursor = next,
+                    None => break,
+                }
+                if matches!(motion, M::Top | M::Bottom | M::LineStart | M::FirstNonBlank | M::LineEnd | M::NextMatch | M::PreviousMatch) {
+                    break;
+                }
             }
-            tail
+            block_list.swarm_set_copy_selection(selecting.then_some(anchor), cursor, lines)
         };
-        if let Some(tail) = tail {
-            self.scroll_to_row_if_not_visible((tail.row - 0.5.into_lines()).into_lines(), ctx);
+        self.scroll_to_row_if_not_visible((at.row - 0.5.into_lines()).into_lines(), ctx);
+        ctx.notify();
+    }
+
+    /// swarm-term: `V` selects whole lines from the cursor, or goes back to selecting characters.
+    fn swarm_copy_mode_line_select(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(selecting) = self.swarm_copy_mode else { return };
+        let lines = !(selecting && self.swarm_copy_lines);
+        self.swarm_copy_lines = lines;
+        self.swarm_copy_mode = Some(true);
+        let mut model = self.model.lock();
+        let block_list = model.block_list_mut();
+        if let Some((anchor, cursor)) = block_list.swarm_selection_ends() {
+            block_list.swarm_set_copy_selection(Some(anchor), cursor, lines);
         }
+        drop(model);
+        ctx.notify();
+    }
+
+    /// swarm-term: `o` moves the cursor to the selection's other end.
+    fn swarm_copy_mode_swap_ends(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.swarm_copy_mode != Some(true) {
+            return;
+        }
+        let lines = self.swarm_copy_lines;
+        let at = {
+            let mut model = self.model.lock();
+            let block_list = model.block_list_mut();
+            let Some((anchor, cursor)) = block_list.swarm_selection_ends() else { return };
+            block_list.swarm_set_copy_selection(Some(cursor), anchor, lines)
+        };
+        self.scroll_to_row_if_not_visible((at.row - 0.5.into_lines()).into_lines(), ctx);
         ctx.notify();
     }
 
     /// swarm-term: leaves copy mode, clearing its cursor or selection.
     fn swarm_copy_mode_exit(&mut self, ctx: &mut ViewContext<Self>) {
+        self.swarm_copy_lines = false;
+        self.swarm_copy_count = 0;
         if self.swarm_copy_mode.take().is_some() {
             self.model.lock().block_list_mut().clear_selection();
             ctx.notify();
@@ -27962,8 +28069,12 @@ impl TypedActionView for TerminalView {
             | SwarmRestartSession
             | SwarmCloseEndedSession
             | SwarmCopyModeEnter
-            | SwarmCopyModeMove(_)
+            | SwarmCopyModeMotion(_)
             | SwarmCopyModeToggleSelect
+            | SwarmCopyModeLineSelect
+            | SwarmCopyModeSwapEnds
+            | SwarmCopyModeCount(_)
+            | SwarmCopyModeSearch
             | SwarmCopyModeYank
             | SwarmCopyModeExit
             | InsertMostRecentCommandCorrection
@@ -28488,13 +28599,24 @@ impl TypedActionView for TerminalView {
             }
             SwarmCloseEndedSession => self.close_ended_swarm_session(ctx),
             SwarmCopyModeEnter => self.swarm_copy_mode_enter(ctx),
-            SwarmCopyModeMove(direction) => self.swarm_copy_mode_move(direction, ctx),
+            SwarmCopyModeMotion(motion) => self.swarm_copy_mode_motion(*motion, ctx),
             SwarmCopyModeToggleSelect => {
                 if let Some(selecting) = self.swarm_copy_mode.as_mut() {
                     *selecting = !*selecting;
+                    self.swarm_copy_lines = false;
                     ctx.notify();
                 }
             }
+            SwarmCopyModeLineSelect => self.swarm_copy_mode_line_select(ctx),
+            SwarmCopyModeSwapEnds => self.swarm_copy_mode_swap_ends(ctx),
+            SwarmCopyModeCount(digit) => {
+                if *digit == 0 && self.swarm_copy_count == 0 {
+                    self.swarm_copy_mode_motion(action::SwarmCopyMotion::LineStart, ctx);
+                } else {
+                    self.swarm_copy_count = (self.swarm_copy_count * 10 + usize::from(*digit)).min(9999);
+                }
+            }
+            SwarmCopyModeSearch => self.show_find_bar(ctx),
             SwarmCopyModeYank => {
                 if self.swarm_copy_mode.is_some() {
                     self.copy(ctx);
