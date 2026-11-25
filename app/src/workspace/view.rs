@@ -6990,12 +6990,24 @@ impl Workspace {
         let Some(daemons) = daemon::daemons() else { return };
         let target = host.clone();
         let rx = daemons.run(async move {
-            tokio::task::spawn_blocking(move || daemon::forward_port(&target, port))
-                .await
-                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+            tokio::task::spawn_blocking(move || {
+                daemon::forward_port(&target, port).map(|local| (local, daemon::forwarded_port_answers(local)))
+            })
+            .await
+            .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
         });
         let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
-            Ok(Ok(local)) => ctx.open_url(&format!("http://localhost:{local}")),
+            Ok(Ok((local, true))) => ctx.open_url(&format!("http://localhost:{local}")),
+            // The tunnel is up but nothing serves on the host's port yet: say so
+            // rather than open a browser page that can't connect.
+            Ok(Ok((local, false))) => me.swarm_alert(
+                format!("Nothing is listening on port {port} on {host}"),
+                format!(
+                    "The forward is open. Start the server on {host}, then open http://localhost:{local}. \
+                     Stop it from Go to Anything (⌘P)."
+                ),
+                ctx,
+            ),
             Ok(Err(e)) => me.swarm_alert(format!("Couldn't forward port {port} from {host}"), format!("{e:#}"), ctx),
             Err(_) => {}
         });

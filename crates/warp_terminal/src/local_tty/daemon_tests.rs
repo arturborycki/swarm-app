@@ -67,3 +67,25 @@ fn background_output_is_unseen_until_marked_seen() {
     forget_output(id);
     assert!(!has_unseen_output(id));
 }
+
+#[test]
+fn forwarded_port_answers_tells_a_waiting_server_from_a_closed_end() {
+    use std::net::TcpListener;
+    // A server that waits for a request answers.
+    let waiting = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = waiting.local_addr().unwrap().port();
+    let holder = std::thread::spawn(move || {
+        let (conn, _) = waiting.accept().unwrap();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        drop(conn);
+    });
+    assert!(forwarded_port_answers(port));
+    holder.join().unwrap();
+
+    // What ssh does when nothing listens on the host: accept, then close.
+    let closing = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = closing.local_addr().unwrap().port();
+    let closer = std::thread::spawn(move || drop(closing.accept().unwrap()));
+    assert!(!forwarded_port_answers(port));
+    closer.join().unwrap();
+}

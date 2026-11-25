@@ -1077,6 +1077,25 @@ const REMOTE_BIN_DIR: &str = ".local/share/swarm/bin";
 /// process). Each ends when the app quits (see [`forward_port`]).
 static FORWARDS: LazyLock<Mutex<HashMap<(String, u16), (u16, std::process::Child)>>> = LazyLock::new(Default::default);
 
+/// Whether something answers at the far end of the forward on `local`: ssh
+/// accepts the connection here, then closes it within a round trip when
+/// nothing listens on the host's port. A server that waits for a request, as
+/// web servers do, keeps it open and counts as answering.
+pub fn forwarded_port_answers(local: u16) -> bool {
+    use std::io::Read;
+    let addr = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, local));
+    let Ok(mut stream) = std::net::TcpStream::connect_timeout(&addr, Duration::from_secs(2)) else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(1200)));
+    let mut byte = [0u8; 1];
+    match stream.read(&mut byte) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => matches!(e.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut),
+    }
+}
+
 /// Forwards `remote_port` on `host` to a port on this Mac (the same number if
 /// it's free, else any free one) with `ssh -N -L`, using the user's own ssh
 /// config and keys, and returns the local port. Waits a moment to report a

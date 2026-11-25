@@ -771,7 +771,8 @@ void init_warp_nswindow(NSWindow<WarpWindowProtocol> *window, bool testMode, boo
         (self.collectionBehavior | NSWindowCollectionBehaviorCanJoinAllSpaces |
          NSWindowCollectionBehaviorFullScreenAuxiliary);
 
-    [self setMovable:NO];
+    // swarm-term: the centered Scratch Terminal panel can be dragged by its top strip.
+    [self setMovable:YES];
     [self makeKeyAndOrderFront:nil];
     activate_app_and_focus_window(self);
 }
