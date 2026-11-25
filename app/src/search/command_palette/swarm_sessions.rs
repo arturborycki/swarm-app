@@ -60,6 +60,24 @@ impl SyncDataSource for DataSource {
                     WorkspaceAction::SwarmConnectHost(term.to_string()),
                 ));
             }
+            // A typed port ("3000", ":3000", "port 3000"): forward it from
+            // each connected host and open it.
+            if let Some(port) = typed_port(term) {
+                for host in sessions.followed_hosts() {
+                    items.push((
+                        format!("Forward port {port} from {host}"),
+                        format!("open localhost:{port}"),
+                        WorkspaceAction::SwarmForwardPort { host, port },
+                    ));
+                }
+            }
+            for (host, remote, local) in daemon::port_forwards() {
+                items.push((
+                    format!("Stop forwarding {host}:{remote}"),
+                    format!("localhost:{local}"),
+                    WorkspaceAction::SwarmStopForward { host, port: remote },
+                ));
+            }
             // A typed folder on this Mac: "~/src/api" or "/tmp".
             if let Some(folder) = typed_folder(term) {
                 items.push((
@@ -152,6 +170,16 @@ impl SyncDataSource for DataSource {
     }
 }
 
+/// `term` as a port number: "3000", ":3000" or "port 3000".
+fn typed_port(term: &str) -> Option<u16> {
+    let digits = term.strip_prefix("port").map(str::trim_start).unwrap_or(term);
+    let digits = digits.strip_prefix(':').unwrap_or(digits);
+    if digits.is_empty() || digits.len() > 5 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    digits.parse::<u16>().ok().filter(|p| *p > 0)
+}
+
 /// `term` as a folder on this Mac, if it's a path ("~/src", "/tmp") to an
 /// existing folder.
 fn typed_folder(term: &str) -> Option<String> {
@@ -228,7 +256,17 @@ impl crate::search::item::SearchItem for SearchItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_host, typed_folder};
+    use super::{looks_like_host, typed_folder, typed_port};
+
+    #[test]
+    fn typed_ports() {
+        assert_eq!(typed_port("3000"), Some(3000));
+        assert_eq!(typed_port(":8080"), Some(8080));
+        assert_eq!(typed_port("port 5173"), Some(5173));
+        for no in ["", "0", "70000", "abc", "30 00", "port"] {
+            assert_eq!(typed_port(no), None, "{no}");
+        }
+    }
 
     #[test]
     fn typed_folders() {

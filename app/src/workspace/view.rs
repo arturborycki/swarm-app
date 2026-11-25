@@ -6921,6 +6921,25 @@ impl Workspace {
         self.new_swarm_session_in(host, None, ctx);
     }
 
+    /// Forwards `port` on `host` to this Mac in the background, then opens it
+    /// in the browser.
+    #[cfg(unix)]
+    fn swarm_forward_port(&mut self, host: String, port: u16, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let target = host.clone();
+        let rx = daemons.run(async move {
+            tokio::task::spawn_blocking(move || daemon::forward_port(&target, port))
+                .await
+                .unwrap_or_else(|e| Err(anyhow::anyhow!("{e}")))
+        });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
+            Ok(Ok(local)) => ctx.open_url(&format!("http://localhost:{local}")),
+            Ok(Err(e)) => me.swarm_alert(format!("Couldn't forward port {port} from {host}"), format!("{e:#}"), ctx),
+            Err(_) => {}
+        });
+    }
+
     /// Starts a session on `host` in folder `cwd` (else its home) and opens it.
     #[cfg(unix)]
     fn new_swarm_session_in(&mut self, host: Option<String>, cwd: Option<String>, ctx: &mut ViewContext<Self>) {
@@ -27099,6 +27118,18 @@ impl TypedActionView for Workspace {
                 self.new_swarm_session_in(host.clone(), Some(cwd.clone()), ctx);
                 #[cfg(not(unix))]
                 let _ = (host, cwd);
+            }
+            SwarmForwardPort { host, port } => {
+                #[cfg(unix)]
+                self.swarm_forward_port(host.clone(), *port, ctx);
+                #[cfg(not(unix))]
+                let _ = (host, port);
+            }
+            SwarmStopForward { host, port } => {
+                #[cfg(unix)]
+                warp_terminal::local_tty::daemon::stop_port_forward(host, *port);
+                #[cfg(not(unix))]
+                let _ = (host, port);
             }
             SwarmShowSession(warp_session_id) => {
                 let found = self.tabs.iter().enumerate().find_map(|(index, tab)| {

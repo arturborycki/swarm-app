@@ -147,6 +147,10 @@ pub enum WorkspaceAction {
     SwarmNewSessionIn { host: Option<String>, cwd: String },
     /// swarm-term: show the tab holding this Warp session, and focus it.
     SwarmShowSession(u64),
+    /// swarm-term: forward a port on a host to this Mac and open it.
+    SwarmForwardPort { host: String, port: u16 },
+    /// swarm-term: end a port forward.
+    SwarmStopForward { host: String, port: u16 },
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
     /// swarm-term: replace the ended daemon session behind this Warp session
@@ -1182,6 +1186,8 @@ impl WorkspaceAction {
             | SwarmNewSession { .. }
             | SwarmNewSessionIn { .. }
             | SwarmShowSession(_)
+            | SwarmForwardPort { .. }
+            | SwarmStopForward { .. }
             | SwarmRetryConnections
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
