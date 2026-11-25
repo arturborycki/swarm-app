@@ -1167,6 +1167,56 @@ pub fn port_forwards() -> Vec<(String, u16, u16)> {
     list
 }
 
+/// Listening ports found in each host's sessions (`None` is this Mac), from
+/// the last [`refresh_ports`].
+type HostPorts = Vec<(String, Vec<swarm_client::swarm_proto::ListeningPort>)>;
+static PORTS: LazyLock<Mutex<HashMap<Option<String>, HostPorts>>> = LazyLock::new(Default::default);
+
+/// Asks the daemon on each of `hosts` which ports programs in its sessions
+/// listen on, such as a development server, and keeps the answers for
+/// [`detected_ports`]. True when anything changed. A daemon from another build
+/// isn't asked: an older one would drop the connection on the request.
+pub async fn refresh_ports(daemons: &'static Daemons, hosts: Vec<Option<String>>) -> bool {
+    let asks = hosts.into_iter().map(|host| async move {
+        let found = async {
+            let client = daemons.client(host.as_deref()).await?;
+            if client.daemon().version != VERSION {
+                return Ok(Vec::new());
+            }
+            tokio::time::timeout(Duration::from_secs(5), client.ports()).await?
+        }
+        .await
+        .unwrap_or_else(|e: anyhow::Error| {
+            log::debug!("swarm: listening ports on {}: {e:#}", host.as_deref().unwrap_or("this Mac"));
+            Vec::new()
+        });
+        (host, found)
+    });
+    let answers = futures::future::join_all(asks).await;
+    let mut ports = PORTS.lock().unwrap();
+    let mut changed = false;
+    for (host, found) in answers {
+        if ports.get(&host) != Some(&found) {
+            changed = true;
+            ports.insert(host, found);
+        }
+    }
+    changed
+}
+
+/// Ports found by the last [`refresh_ports`]: (host, daemon session id, port).
+pub fn detected_ports() -> Vec<(Option<String>, String, swarm_client::swarm_proto::ListeningPort)> {
+    let ports = PORTS.lock().unwrap();
+    let mut list: Vec<_> = ports
+        .iter()
+        .flat_map(|(host, sessions)| {
+            sessions.iter().flat_map(move |(id, list)| list.iter().map(move |p| (host.clone(), id.clone(), p.clone())))
+        })
+        .collect();
+    list.sort_by(|a, b| (&a.0, a.2.port).cmp(&(&b.0, b.2.port)));
+    list
+}
+
 /// Ends the forward of `remote_port` on `host`.
 pub fn stop_port_forward(host: &str, remote_port: u16) {
     if let Some((_, mut child)) = FORWARDS.lock().unwrap().remove(&(host.to_string(), remote_port)) {

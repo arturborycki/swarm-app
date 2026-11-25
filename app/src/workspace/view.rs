@@ -6982,6 +6982,23 @@ impl Workspace {
         }
     }
 
+    /// Asks each host which ports programs in its sessions listen on, for Go
+    /// to Anything's "Open localhost:…" rows; the open palette re-runs its
+    /// query when the answer changed.
+    #[cfg(unix)]
+    fn swarm_refresh_ports(&mut self, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let mut hosts = vec![None];
+        hosts.extend(crate::swarm::sessions::SwarmSessions::as_ref(ctx).followed_hosts().into_iter().map(Some));
+        let rx = daemons.run(daemon::refresh_ports(daemons, hosts));
+        let _ = ctx.spawn(async move { rx.recv().await }, |me, changed, ctx| {
+            if matches!(changed, Ok(true)) && me.current_workspace_state.is_palette_open {
+                me.palette.update(ctx, |palette, ctx| palette.rerun_query(ctx));
+            }
+        });
+    }
+
     /// Forwards `port` on `host` to this Mac in the background, then opens it
     /// in the browser.
     #[cfg(unix)]
@@ -16219,7 +16236,11 @@ impl Workspace {
                     };
                     self.open_ctrl_tab_palette(filter, shift_pressed_initially, ctx);
                 }
-                _ => self.open_navigation_palette(ctx),
+                _ => {
+                    self.open_navigation_palette(ctx);
+                    #[cfg(unix)]
+                    self.swarm_refresh_ports(ctx);
+                }
             },
             PaletteMode::LaunchConfig => self.open_launch_config_palette(ctx),
             PaletteMode::WarpDrive => self.open_warp_drive_palette(ctx),
@@ -27193,6 +27214,13 @@ impl TypedActionView for Workspace {
                 let _ = (host, cwd);
             }
             SwarmForwardPort { host, port } => {
+                #[cfg(unix)]
+                self.swarm_forward_port(host.clone(), *port, ctx);
+                #[cfg(not(unix))]
+                let _ = (host, port);
+            }
+            SwarmOpenPort { host: None, port } => ctx.open_url(&format!("http://localhost:{port}")),
+            SwarmOpenPort { host: Some(host), port } => {
                 #[cfg(unix)]
                 self.swarm_forward_port(host.clone(), *port, ctx);
                 #[cfg(not(unix))]
