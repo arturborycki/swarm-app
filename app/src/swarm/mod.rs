@@ -7,6 +7,8 @@
 
 #[cfg(unix)]
 pub mod connect;
+#[cfg(unix)]
+pub mod debug_info;
 #[cfg(target_os = "macos")]
 pub mod install;
 pub mod look;

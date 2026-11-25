@@ -3,16 +3,21 @@ use warpui::elements::{
     Align, CacheOption, ConstrainedBox, Container, CrossAxisAlignment, Element, Flex, Image,
     MainAxisAlignment, MouseStateHandle, ParentElement, Wrap,
 };
-use warpui::ui_components::components::UiComponent;
-use warpui::{AppContext, Entity, TypedActionView, View, ViewContext, ViewHandle};
+use settings::Setting as _;
+use warp_errors::report_if_error;
+use warpui::ui_components::button::ButtonVariant;
+use warpui::ui_components::components::{UiComponent, UiComponentStyles};
+use warpui::ui_components::switch::SwitchStateHandle;
+use warpui::{AppContext, Entity, SingletonEntity as _, TypedActionView, View, ViewContext, ViewHandle};
 
 use super::SettingsSection;
 use super::settings_page::{
     MatchData, PageType, SettingsPageEvent, SettingsPageMeta, SettingsPageViewHandle,
-    SettingsWidget,
+    SettingsWidget, build_toggle_element, render_separator, render_sub_header,
 };
 use crate::appearance::Appearance;
 use crate::channel::ChannelState;
+use crate::settings::swarm_updates::SwarmUpdateSettings;
 use crate::themes::theme::ColorScheme;
 use crate::workspace::WorkspaceAction;
 
@@ -21,18 +26,38 @@ pub struct AboutPageView {
 }
 
 impl AboutPageView {
-    pub fn new(_ctx: &mut ViewContext<AboutPageView>) -> Self {
+    pub fn new(ctx: &mut ViewContext<AboutPageView>) -> Self {
+        ctx.subscribe_to_model(&SwarmUpdateSettings::handle(ctx), |_, _, _, ctx| ctx.notify());
         AboutPageView {
             page: PageType::new_monolith(AboutPageWidget::default(), None, false),
         }
     }
 }
 
+/// swarm-term: the update settings shown under the version.
+#[derive(Clone, Debug)]
+pub enum AboutPageAction {
+    SetDownloadInBackground(bool),
+    SetInstallWhenIdle(bool),
+}
+
 impl Entity for AboutPageView {
     type Event = SettingsPageEvent;
 }
 impl TypedActionView for AboutPageView {
-    type Action = ();
+    type Action = AboutPageAction;
+
+    fn handle_action(&mut self, action: &Self::Action, ctx: &mut ViewContext<Self>) {
+        SwarmUpdateSettings::handle(ctx).update(ctx, |settings, ctx| match action {
+            AboutPageAction::SetDownloadInBackground(on) => {
+                report_if_error!(settings.download_in_background.set_value(*on, ctx));
+            }
+            AboutPageAction::SetInstallWhenIdle(on) => {
+                report_if_error!(settings.install_when_idle.set_value(*on, ctx));
+            }
+        });
+        ctx.notify();
+    }
 }
 
 impl View for AboutPageView {
@@ -48,20 +73,82 @@ impl View for AboutPageView {
 #[derive(Default)]
 struct AboutPageWidget {
     copy_version_button_mouse_state: MouseStateHandle,
+    check_for_updates: MouseStateHandle,
+    download_switch: SwitchStateHandle,
+    install_switch: SwitchStateHandle,
+}
+
+impl AboutPageWidget {
+    /// swarm-term: Check for Updates and when Swarm downloads and installs them.
+    fn render_updates(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        let settings = SwarmUpdateSettings::as_ref(app);
+        let download = *settings.download_in_background;
+        let install = download && *settings.install_when_idle;
+        let mut column = Flex::column();
+        column.add_child(render_separator(appearance));
+        column.add_child(render_sub_header(appearance, "Updates", None));
+        let check = appearance
+            .ui_builder()
+            .button(ButtonVariant::Secondary, self.check_for_updates.clone())
+            .with_text_label("Check for Updates".to_string())
+            .with_style(UiComponentStyles { font_size: Some(13.), ..Default::default() })
+            .build()
+            .on_click(|ctx, _, _| ctx.dispatch_typed_action(WorkspaceAction::SwarmCheckForUpdates))
+            .finish();
+        column.add_child(Container::new(check).with_margin_bottom(12.).finish());
+        let switch = appearance
+            .ui_builder()
+            .switch(self.download_switch.clone())
+            .check(download)
+            .build()
+            .on_click(move |ctx, _, _| ctx.dispatch_typed_action(AboutPageAction::SetDownloadInBackground(!download)))
+            .finish();
+        column.add_child(build_toggle_element(
+            appearance.ui_builder().span("Download updates in the background".to_string()).build().finish(),
+            switch,
+            appearance,
+            Some(
+                "Swarm checks for a new version at launch and daily. Off: it asks before downloading. On: it downloads the new version first, then offers to restart into it; quitting Swarm also installs it."
+                    .into(),
+            ),
+        ));
+        let switch = appearance
+            .ui_builder()
+            .switch(self.install_switch.clone())
+            .check(install)
+            .with_disabled(!download)
+            .build()
+            .on_click(move |ctx, _, _| {
+                if download {
+                    ctx.dispatch_typed_action(AboutPageAction::SetInstallWhenIdle(!install))
+                }
+            })
+            .finish();
+        column.add_child(build_toggle_element(
+            appearance.ui_builder().span("Install updates while Swarm isn't in use".to_string()).build().finish(),
+            switch,
+            appearance,
+            Some(
+                "Once an update is downloaded and you've been in another app for a minute, Swarm installs it and reopens in the background. Your sessions keep running."
+                    .into(),
+            ),
+        ));
+        Container::new(column.finish()).with_margin_top(24.).finish()
+    }
 }
 
 impl SettingsWidget for AboutPageWidget {
     type View = AboutPageView;
 
     fn search_terms(&self) -> &str {
-        "about swarm version"
+        "about swarm version updates check download install automatic"
     }
 
     fn render(
         &self,
         _view: &AboutPageView,
         appearance: &Appearance,
-        _app: &AppContext,
+        app: &AppContext,
     ) -> Box<dyn Element> {
         let theme = appearance.theme();
         let ui_builder = appearance.ui_builder();
@@ -140,6 +227,10 @@ impl SettingsWidget for AboutPageWidget {
                         .build()
                         .with_margin_top(16.)
                         .finish(),
+                )
+                .with_children(
+                    (crate::swarm::SWARM_CHROME && cfg!(target_os = "macos"))
+                        .then(|| self.render_updates(appearance, app)),
                 )
                 .finish(),
         )

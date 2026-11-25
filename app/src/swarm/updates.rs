@@ -74,6 +74,18 @@ pub fn claim_offer(version: &str) -> bool {
     true
 }
 
+/// When the last check ran and what it found, for Copy Debug Info.
+static LAST_CHECK: std::sync::Mutex<Option<(std::time::SystemTime, String)>> = std::sync::Mutex::new(None);
+
+pub fn record_check(outcome: String) {
+    *LAST_CHECK.lock().unwrap_or_else(|e| e.into_inner()) = Some((std::time::SystemTime::now(), outcome));
+}
+
+/// The last check's time and outcome, if one ran.
+pub fn last_check() -> Option<(std::time::SystemTime, String)> {
+    LAST_CHECK.lock().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// The feed URL: `SWARM_UPDATE_FEED` (a GitHub "latest release" API URL, or
 /// anything answering with the same JSON) or the default.
 fn feed() -> String {

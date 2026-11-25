@@ -3,6 +3,8 @@ pub mod ai;
 mod alias_expansion;
 pub mod app_icon;
 pub mod app_installation_detection;
+// swarm-term: when Swarm downloads and installs updates.
+pub mod swarm_updates;
 mod block_visibility;
 mod changelog;
 pub mod cloud_preferences;

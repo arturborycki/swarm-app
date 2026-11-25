@@ -168,6 +168,8 @@ pub enum WorkspaceAction {
     SwarmRestartSession(u64),
     /// swarm-term: compare this app with the latest published release.
     SwarmCheckForUpdates,
+    /// swarm-term: copy the app's, daemons' and updater's state for a bug report.
+    SwarmCopyDebugInfo,
     /// swarm-term: mute the active tab's sessions (no notifications, no Dock
     /// badge), or unmute them if they all are.
     SwarmToggleMute,
@@ -1205,6 +1207,7 @@ impl WorkspaceAction {
             | SwarmRetryConnections
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
+            | SwarmCopyDebugInfo
             | SwarmToggleMute
             | SwarmMarkUnread
             | SwarmNavigateBack

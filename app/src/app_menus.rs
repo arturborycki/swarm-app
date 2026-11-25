@@ -1078,6 +1078,13 @@ fn make_new_help_menu() -> Menu {
                 link_menu_item("Swarm on GitHub…", crate::swarm::REPO_URL.into()),
                 link_menu_item("Design Notes…", format!("{}/blob/main/docs/DESIGN.md", crate::swarm::REPO_URL).into()),
                 link_menu_item("Report an Issue…", format!("{}/issues", crate::swarm::REPO_URL).into()),
+                MenuItem::Separator,
+                MenuItem::Custom(CustomMenuItem::new(
+                    "Copy Debug Info",
+                    |ctx| ctx.dispatch_global_action("root_view:swarm_show", &Some(WorkspaceAction::SwarmCopyDebugInfo)),
+                    no_updates,
+                    None,
+                )),
             ],
         );
     }
