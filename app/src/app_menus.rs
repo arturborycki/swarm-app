@@ -649,6 +649,9 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
             [
                 swarm_workspace_item("Balance Splits", WorkspaceAction::SwarmBalanceSplits),
                 swarm_workspace_item("Move Pane to New Tab", WorkspaceAction::SwarmMovePaneToNewTab),
+                swarm_workspace_item("Move Pane to Tab…", WorkspaceAction::SwarmChooseTabForPane),
+                swarm_workspace_item("Move Pane to New Window", WorkspaceAction::SwarmMovePaneToNewWindow),
+                swarm_workspace_item("Move Tab to New Window", WorkspaceAction::SwarmMoveTabToNewWindow),
                 swarm_workspace_item("Close Other Panes", WorkspaceAction::SwarmCloseOtherPanes),
             ],
         );

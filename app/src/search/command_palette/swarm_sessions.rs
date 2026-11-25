@@ -53,6 +53,17 @@ impl SyncDataSource for DataSource {
             let sessions = SwarmSessions::as_ref(app);
             let mut hosts: Vec<Option<String>> = vec![None];
             hosts.extend(daemon::known_hosts().into_iter().map(Some));
+            // "move pane …": the tabs the focused pane can move into.
+            if term.to_lowercase().starts_with("move") {
+                let targets = crate::swarm::PANE_MOVE_TARGETS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                for (position, (pane_group, title)) in targets.into_iter().enumerate() {
+                    items.push((
+                        format!("Move pane to {title}"),
+                        format!("tab {}", position + 1),
+                        WorkspaceAction::SwarmMovePaneToTab(pane_group),
+                    ));
+                }
+            }
             // A host that isn't in ~/.ssh/config: `user@host` or a host name.
             if looks_like_host(term) {
                 items.push((

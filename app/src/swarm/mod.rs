@@ -7,6 +7,10 @@
 
 #[cfg(unix)]
 pub mod connect;
+
+/// Tabs the focused pane can move to, as (pane group, title), for Go to Anything's
+/// "Move pane to …" rows. Set when the palette opens.
+pub static PANE_MOVE_TARGETS: std::sync::Mutex<Vec<(warpui::EntityId, String)>> = std::sync::Mutex::new(Vec::new());
 pub mod copy_motion;
 #[cfg(unix)]
 pub mod debug_info;

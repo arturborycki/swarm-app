@@ -6866,18 +6866,85 @@ impl Workspace {
     }
 
     /// Moves the focused pane of the active tab to a new tab right after it,
-    /// in the same group. Nothing happens with a single pane.
-    fn swarm_move_pane_to_new_tab(&mut self, ctx: &mut ViewContext<Self>) {
+    /// in the same group, and returns whether it did. Nothing happens with a single pane.
+    fn swarm_move_pane_to_new_tab(&mut self, ctx: &mut ViewContext<Self>) -> bool {
         let index = self.active_tab_index;
         let pane_group = self.tabs[index].pane_group.clone();
         if pane_group.as_ref(ctx).visible_pane_ids().len() < 2 {
-            return;
+            return false;
         }
         let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
         let group_id = self.tabs[index].group_id;
-        if let Some(pane) = pane_group.update(ctx, |pg, ctx| pg.remove_pane_for_move(&pane_id, ctx)) {
-            self.add_tab_from_existing_pane(pane, index + 1, group_id, ctx);
+        let Some(pane) = pane_group.update(ctx, |pg, ctx| pg.remove_pane_for_move(&pane_id, ctx)) else {
+            return false;
+        };
+        self.add_tab_from_existing_pane(pane, index + 1, group_id, ctx);
+        true
+    }
+
+    /// Lists the other tabs in Go to Anything as "Move pane to …" rows.
+    fn swarm_choose_tab_for_pane(&mut self, ctx: &mut ViewContext<Self>) {
+        self.swarm_set_pane_move_targets(ctx);
+        if self.tabs.len() < 2 {
+            self.swarm_alert("No other tab", "Open another tab first, or use Move Pane to New Tab.", ctx);
+            return;
         }
+        self.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+        self.palette.update(ctx, |palette, ctx| palette.insert_query_text("move pane to ", ctx));
+    }
+
+    /// Records the tabs other than the active one for Go to Anything's "Move pane to …" rows.
+    fn swarm_set_pane_move_targets(&self, ctx: &AppContext) {
+        let targets = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter(|(index, _)| *index != self.active_tab_index)
+            .map(|(_, tab)| (tab.pane_group.id(), tab.pane_group.as_ref(ctx).display_title(ctx)))
+            .collect();
+        *crate::swarm::PANE_MOVE_TARGETS.lock().unwrap_or_else(|e| e.into_inner()) = targets;
+    }
+
+    /// Moves the focused pane into the tab showing `target`, to the right of its panes, and
+    /// shows that tab. The tab it leaves closes if that was its only pane.
+    fn swarm_move_pane_to_tab(&mut self, target: EntityId, ctx: &mut ViewContext<Self>) {
+        let source = self.tabs[self.active_tab_index].pane_group.clone();
+        let Some(target_group) = self.tabs.iter().find(|tab| tab.pane_group.id() == target).map(|tab| tab.pane_group.clone())
+        else {
+            return;
+        };
+        if target_group.id() == source.id() {
+            return;
+        }
+        let pane_id = source.as_ref(ctx).focused_pane_id(ctx);
+        let Some(pane) = source.update(ctx, |group, ctx| group.remove_pane_for_move(&pane_id, ctx)) else { return };
+        target_group.update(ctx, |group, ctx| group.add_moved_pane(pane, pane_group::Direction::Right, None, ctx));
+        if let Some(index) = self.tabs.iter().position(|tab| tab.pane_group.id() == target) {
+            self.activate_tab_internal(index, ctx);
+        }
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+    }
+
+    /// Moves the active tab to a new window just below and right of this one, and returns
+    /// whether it did. A window's only tab stays.
+    fn swarm_move_tab_to_new_window(&mut self, ctx: &mut ViewContext<Self>) -> bool {
+        let index = self.active_tab_index;
+        let Some(transferred) = self.get_tab_transfer_info(index, ctx) else { return false };
+        let Some(bounds) = ctx.window_bounds(&ctx.window_id()) else { return false };
+        ctx.unsubscribe_to_view(&transferred.pane_group);
+        crate::root_view::create_transferred_window(
+            transferred,
+            ctx.window_id(),
+            bounds.size(),
+            bounds.origin() + vec2f(32., 32.),
+            false,
+            ctx,
+        );
+        self.remove_tab_without_undo(index, ctx);
+        ctx.dispatch_global_action("workspace:save_app", ());
+        ctx.notify();
+        true
     }
 
     /// The active tab for VoiceOver: "build, tab 2 of 5, This Mac, running cargo".
@@ -27444,7 +27511,19 @@ impl TypedActionView for Workspace {
                 let pane_group = self.active_tab_pane_group().clone();
                 pane_group.update(ctx, |pg, ctx| pg.balance_panes(ctx));
             }
-            SwarmMovePaneToNewTab => self.swarm_move_pane_to_new_tab(ctx),
+            SwarmMovePaneToNewTab => {
+                self.swarm_move_pane_to_new_tab(ctx);
+            }
+            SwarmChooseTabForPane => self.swarm_choose_tab_for_pane(ctx),
+            SwarmMovePaneToTab(pane_group) => self.swarm_move_pane_to_tab(*pane_group, ctx),
+            SwarmMovePaneToNewWindow => {
+                if self.swarm_move_pane_to_new_tab(ctx) {
+                    self.swarm_move_tab_to_new_window(ctx);
+                }
+            }
+            SwarmMoveTabToNewWindow => {
+                self.swarm_move_tab_to_new_window(ctx);
+            }
             SwarmToggleActivity => {
                 let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
                 if !sidebar_shown {

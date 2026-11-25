@@ -189,6 +189,14 @@ pub enum WorkspaceAction {
     SwarmBalanceSplits,
     /// swarm-term: move the focused pane to a new tab after this one.
     SwarmMovePaneToNewTab,
+    /// swarm-term: open Go to Anything on the tabs the focused pane can move to.
+    SwarmChooseTabForPane,
+    /// swarm-term: move the focused pane into the tab with this pane group, beside its panes.
+    SwarmMovePaneToTab(EntityId),
+    /// swarm-term: move the focused pane to a window of its own.
+    SwarmMovePaneToNewWindow,
+    /// swarm-term: move the active tab to a window of its own.
+    SwarmMoveTabToNewWindow,
     /// swarm-term: the sidebar lists only sessions with something to report,
     /// or every session again.
     SwarmToggleActivity,
@@ -1219,6 +1227,10 @@ impl WorkspaceAction {
             | SwarmCloseOtherPanes
             | SwarmBalanceSplits
             | SwarmMovePaneToNewTab
+            | SwarmChooseTabForPane
+            | SwarmMovePaneToTab(_)
+            | SwarmMovePaneToNewWindow
+            | SwarmMoveTabToNewWindow
             | SwarmToggleActivity
             | Reauth
             | SignupAnonymousUser
