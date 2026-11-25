@@ -12,6 +12,7 @@ pub mod connect;
 /// "Move pane to …" rows. Set when the palette opens.
 pub static PANE_MOVE_TARGETS: std::sync::Mutex<Vec<(warpui::EntityId, String)>> = std::sync::Mutex::new(Vec::new());
 pub mod copy_motion;
+pub mod theme_import;
 #[cfg(unix)]
 pub mod debug_info;
 #[cfg(target_os = "macos")]

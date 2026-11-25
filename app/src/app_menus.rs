@@ -475,6 +475,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             |_props, _ctx| MenuItemPropertyChanges::default(),
             Keystroke::parse("alt-cmd-t").ok(),
         )));
+        items.push(swarm_workspace_item("Import Theme…", WorkspaceAction::SwarmImportTheme));
         items.push(swarm_workspace_item_with_key(
             "Show Activity",
             WorkspaceAction::SwarmToggleActivity,

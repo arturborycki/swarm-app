@@ -197,6 +197,8 @@ pub enum WorkspaceAction {
     SwarmMovePaneToNewWindow,
     /// swarm-term: move the active tab to a window of its own.
     SwarmMoveTabToNewWindow,
+    /// swarm-term: turn an iTerm2 or Ghostty theme file into a theme and use it.
+    SwarmImportTheme,
     /// swarm-term: the sidebar lists only sessions with something to report,
     /// or every session again.
     SwarmToggleActivity,
@@ -1231,6 +1233,7 @@ impl WorkspaceAction {
             | SwarmMovePaneToTab(_)
             | SwarmMovePaneToNewWindow
             | SwarmMoveTabToNewWindow
+            | SwarmImportTheme
             | SwarmToggleActivity
             | Reauth
             | SignupAnonymousUser

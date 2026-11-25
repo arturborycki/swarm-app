@@ -6882,6 +6882,43 @@ impl Workspace {
         true
     }
 
+    /// Asks for an iTerm2 color preset or a Ghostty theme file, saves it as a theme in the themes
+    /// folder and switches to it.
+    fn swarm_import_theme(&mut self, ctx: &mut ViewContext<Self>) {
+        ctx.open_file_picker(
+            |result, ctx| {
+                let Ok(paths) = result else { return };
+                let Some(path) = paths.first().map(std::path::PathBuf::from) else { return };
+                let imported = crate::swarm::theme_import::import(&path).and_then(|(name, yaml)| {
+                    let dir = crate::user_config::themes_dir();
+                    std::fs::create_dir_all(&dir).with_context(|| format!("create {}", dir.display()))?;
+                    let file = (1..)
+                        .map(|n| if n == 1 { format!("{name}.yaml") } else { format!("{name} {n}.yaml") })
+                        .map(|file| dir.join(file))
+                        .find(|file| !file.exists())
+                        .unwrap_or_else(|| dir.join(format!("{name}.yaml")));
+                    std::fs::write(&file, yaml).with_context(|| format!("write {}", file.display()))?;
+                    Ok((name, file))
+                });
+                match imported {
+                    Ok((name, file)) => {
+                        let theme = ThemeKind::Custom(crate::themes::theme::CustomTheme::new(name, file));
+                        let chooser = ctx.handle().upgrade(ctx).map(|me: ViewHandle<Self>| me.as_ref(ctx).theme_chooser_view.clone());
+                        if let Some(chooser) = chooser {
+                            chooser.update(ctx, |chooser, ctx| chooser.reload_and_set_custom_theme(theme, ctx));
+                        }
+                    }
+                    Err(e) => {
+                        if let Some(me) = ctx.handle().upgrade(ctx) {
+                            me.update(ctx, |me: &mut Self, ctx| me.swarm_alert("Couldn't import the theme", format!("{e:#}"), ctx));
+                        }
+                    }
+                }
+            },
+            FilePickerConfiguration::new(),
+        );
+    }
+
     /// Lists the other tabs in Go to Anything as "Move pane to …" rows.
     fn swarm_choose_tab_for_pane(&mut self, ctx: &mut ViewContext<Self>) {
         self.swarm_set_pane_move_targets(ctx);
@@ -27524,6 +27561,7 @@ impl TypedActionView for Workspace {
             SwarmMoveTabToNewWindow => {
                 self.swarm_move_tab_to_new_window(ctx);
             }
+            SwarmImportTheme => self.swarm_import_theme(ctx),
             SwarmToggleActivity => {
                 let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
                 if !sidebar_shown {
