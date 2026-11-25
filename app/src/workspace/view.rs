@@ -27057,6 +27057,16 @@ impl TypedActionView for Workspace {
                 pane_group.update(ctx, |pg, ctx| pg.balance_panes(ctx));
             }
             SwarmMovePaneToNewTab => self.swarm_move_pane_to_new_tab(ctx),
+            SwarmToggleActivity => {
+                let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
+                if !sidebar_shown {
+                    self.toggle_vertical_tabs_panel(ctx);
+                    self.vertical_tabs_panel.activity_only = true;
+                } else {
+                    self.vertical_tabs_panel.activity_only = !self.vertical_tabs_panel.activity_only;
+                }
+                ctx.notify();
+            }
             SwarmSplitWithTab { tab_index, direction } => {
                 // From the menu: split the session pane in focus.
                 let focused = self.tabs[self.active_tab_index].pane_group.as_ref(ctx).focused_pane_id(ctx);

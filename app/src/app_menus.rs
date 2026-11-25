@@ -457,6 +457,11 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             Some("ctrl-cmd-s"),
         ));
         items.push(swarm_workspace_item_with_key(
+            "Show Activity",
+            WorkspaceAction::SwarmToggleActivity,
+            Some("cmd-."),
+        ));
+        items.push(swarm_workspace_item_with_key(
             "Filter Sessions…",
             WorkspaceAction::SwarmFocusSessionFilter,
             Some("alt-cmd-f"),

@@ -167,6 +167,9 @@ pub enum WorkspaceAction {
     SwarmBalanceSplits,
     /// swarm-term: move the focused pane to a new tab after this one.
     SwarmMovePaneToNewTab,
+    /// swarm-term: the sidebar lists only sessions with something to report,
+    /// or every session again.
+    SwarmToggleActivity,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1184,6 +1187,7 @@ impl WorkspaceAction {
             | SwarmCloseOtherPanes
             | SwarmBalanceSplits
             | SwarmMovePaneToNewTab
+            | SwarmToggleActivity
             | Reauth
             | SignupAnonymousUser
             | LogOut
