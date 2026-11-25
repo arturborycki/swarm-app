@@ -1242,7 +1242,7 @@ async fn ssh(host: &str, command: &str) -> Result<std::process::Output> {
 }
 
 /// This app's platform, as `swarmd` reports it (`<os>-<arch>`).
-fn local_platform() -> String {
+pub fn local_platform() -> String {
     format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH)
 }
 

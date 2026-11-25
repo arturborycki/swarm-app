@@ -18,6 +18,30 @@ pub(crate) mod orchestration_launch_modal;
 pub(crate) mod right_panel;
 mod startup_directory;
 mod tab_grouping;
+
+/// Runs `swarmctl [--host host] agents <sub>` and returns what it printed, or why it failed.
+#[cfg(unix)]
+async fn run_swarmctl_agents(swarmctl: &std::path::Path, host: Option<&str>, sub: &str) -> String {
+    let mut command = tokio::process::Command::new(swarmctl);
+    if let Some(host) = host {
+        command.arg("--host").arg(host);
+    }
+    command.args(["agents", sub]);
+    match tokio::time::timeout(std::time::Duration::from_secs(30), command.output()).await {
+        Ok(Ok(output)) => {
+            let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
+            match (output.status.success(), text.is_empty()) {
+                (true, false) => text,
+                (true, true) => "Done.".to_string(),
+                (false, _) => format!("Failed: {}", if err.is_empty() { text } else { err }),
+            }
+        }
+        Ok(Err(e)) => format!("Failed: {e}"),
+        Err(_) => "Failed: timed out".to_string(),
+    }
+}
+
 #[cfg(test)]
 #[path = "view_tests.rs"]
 pub(crate) mod tests;
@@ -7137,6 +7161,67 @@ impl Workspace {
         let _ = ctx.spawn(async move { warpui::r#async::Timer::after(delay).await }, |me, _, ctx| {
             me.check_for_swarm_updates(true, ctx);
             me.schedule_swarm_update_check(DAILY, ctx);
+        });
+    }
+
+    /// Shows whether Claude Code and Codex report to Swarm on this Mac, and offers to set them up
+    /// here and on each connected host (`swarmctl agents`).
+    #[cfg(unix)]
+    fn set_up_swarm_agents(&mut self, ctx: &mut ViewContext<Self>) {
+        use warp_terminal::local_tty::daemon;
+        let Some(daemons) = daemon::daemons() else { return };
+        let Some(swarmctl) = daemon::bundled_swarmd_dir(&daemon::local_platform()).map(|d| d.join("swarmctl")) else {
+            self.swarm_alert("Can't set up coding agents", "This copy of Swarm has no swarmctl.", ctx);
+            return;
+        };
+        let hosts = crate::swarm::sessions::SwarmSessions::as_ref(ctx).followed_hosts();
+        let status_ctl = swarmctl.clone();
+        let rx = daemons.run(async move { run_swarmctl_agents(&status_ctl, None, "status").await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |_, status, ctx| {
+            let status = status.unwrap_or_else(|_| "Couldn't read the current setup.".to_string());
+            let hosts_note = if hosts.is_empty() {
+                String::new()
+            } else {
+                format!(" Swarm also sets them up on {}.", hosts.join(", "))
+            };
+            let text = format!(
+                "Claude Code and Codex can show in Swarm when they're working, waiting for you or done. Swarm adds hooks to ~/.claude/settings.json and a notify program to ~/.codex/config.toml, after backing up each file. Outside Swarm the agents work as before.{hosts_note}\n\nOn this Mac now:\n{status}"
+            );
+            let install = move |remove: bool| {
+                let swarmctl = swarmctl.clone();
+                let hosts = hosts.clone();
+                move |_: &mut Self, ctx: &mut ViewContext<Self>| {
+                    let Some(daemons) = daemon::daemons() else { return };
+                    let sub = if remove { "uninstall" } else { "install" };
+                    let swarmctl = swarmctl.clone();
+                    let hosts = hosts.clone();
+                    let rx = daemons.run(async move {
+                        let mut out = vec![format!("This Mac:\n{}", run_swarmctl_agents(&swarmctl, None, sub).await)];
+                        for host in hosts {
+                            let result = run_swarmctl_agents(&swarmctl, Some(&host), sub).await;
+                            out.push(format!("{host}:\n{result}"));
+                        }
+                        out.join("\n\n")
+                    });
+                    let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| {
+                        let title = if remove { "Coding agents no longer report to Swarm" } else { "Coding agents set up" };
+                        let tail = if remove { "" } else { "\n\nAgents already running pick this up when they next start." };
+                        me.swarm_alert(title, format!("{}{tail}", result.unwrap_or_default()), ctx);
+                    });
+                }
+            };
+            let dialog = AlertDialogWithCallbacks::for_view(
+                "Set Up Coding Agents",
+                text,
+                vec![
+                    ModalButton::for_view("Set Up", install(false)),
+                    ModalButton::for_view("Remove", install(true)),
+                    ModalButton::for_view("Cancel", |_, _| {}),
+                ],
+                |_, _| {},
+            )
+            .without_dont_ask_again();
+            ctx.show_native_platform_modal(dialog);
         });
     }
 
@@ -27461,6 +27546,10 @@ impl TypedActionView for Workspace {
             SwarmCopyDebugInfo => self.copy_swarm_debug_info(ctx),
             #[cfg(not(unix))]
             SwarmCopyDebugInfo => {}
+            #[cfg(unix)]
+            SwarmSetUpAgents => self.set_up_swarm_agents(ctx),
+            #[cfg(not(unix))]
+            SwarmSetUpAgents => {}
             ShowHeaderToolbarContextMenu { position } => {
                 self.show_header_toolbar_context_menu(*position, ctx);
             }

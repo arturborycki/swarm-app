@@ -1337,6 +1337,12 @@ fn make_swarm_app_menu(ctx: &AppContext) -> Menu {
             },
             None,
         )),
+        MenuItem::Custom(CustomMenuItem::new(
+            "Set Up Coding Agents…",
+            |ctx| ctx.dispatch_global_action("root_view:swarm_show", &Some(WorkspaceAction::SwarmSetUpAgents)),
+            no_updates,
+            None,
+        )),
         MenuItem::Separator,
         MenuItem::Standard(StandardAction::Quit),
     ]);

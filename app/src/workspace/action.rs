@@ -170,6 +170,8 @@ pub enum WorkspaceAction {
     SwarmCheckForUpdates,
     /// swarm-term: copy the app's, daemons' and updater's state for a bug report.
     SwarmCopyDebugInfo,
+    /// swarm-term: have Claude Code and Codex report their state, here and on connected hosts.
+    SwarmSetUpAgents,
     /// swarm-term: mute the active tab's sessions (no notifications, no Dock
     /// badge), or unmute them if they all are.
     SwarmToggleMute,
@@ -1208,6 +1210,7 @@ impl WorkspaceAction {
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
             | SwarmCopyDebugInfo
+            | SwarmSetUpAgents
             | SwarmToggleMute
             | SwarmMarkUnread
             | SwarmNavigateBack
