@@ -6919,6 +6919,50 @@ impl Workspace {
         );
     }
 
+    /// Opens Go to Anything on "cd " with the folders the focused session's host uses.
+    fn swarm_choose_directory(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
+        let Some(id) = view.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) else { return };
+        #[cfg(unix)]
+        let host = crate::swarm::sessions::SwarmSessions::as_ref(ctx).session_for(id).and_then(|(host, _)| host);
+        #[cfg(not(unix))]
+        let host = None;
+        self.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+        *crate::swarm::CD_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, host));
+        self.palette.update(ctx, |palette, ctx| palette.insert_query_text("cd ", ctx));
+    }
+
+    /// Runs `cd` in the session behind `warp_session_id`, or, while a program runs there, opens a
+    /// new session in `path` on the same host.
+    fn swarm_cd_to(&mut self, warp_session_id: u64, host: Option<String>, path: String, ctx: &mut ViewContext<Self>) {
+        let view = self.tabs.iter().find_map(|tab| {
+            tab.pane_group
+                .as_ref(ctx)
+                .terminal_views(ctx)
+                .into_iter()
+                .find(|view| view.as_ref(ctx).active_block_session_id().is_some_and(|id| id.as_u64() == warp_session_id))
+        });
+        match view {
+            Some(view) if !view.as_ref(ctx).is_long_running() => {
+                let quoted = if let Some(rest) = path.strip_prefix("~/") {
+                    format!("~/{}", shell_words::quote(rest))
+                } else if path == "~" {
+                    path.clone()
+                } else {
+                    shell_words::quote(&path).into_owned()
+                };
+                view.update(ctx, |view, ctx| view.execute_command_or_set_pending(&format!("cd {quoted}"), ctx));
+                ctx.focus(&view);
+            }
+            _ => {
+                #[cfg(unix)]
+                self.handle_action(&WorkspaceAction::SwarmNewSessionIn { host, cwd: path }, ctx);
+                #[cfg(not(unix))]
+                let _ = (host, path);
+            }
+        }
+    }
+
     /// Opens Go to Anything on "rename pane to " for the focused pane's session.
     fn swarm_choose_pane_name(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
@@ -6930,19 +6974,19 @@ impl Workspace {
             .unwrap_or_default();
         #[cfg(not(unix))]
         let current = String::new();
-        *crate::swarm::PANE_RENAME_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, current));
         self.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+        *crate::swarm::PANE_RENAME_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, current));
         self.palette.update(ctx, |palette, ctx| palette.insert_query_text("rename pane to ", ctx));
     }
 
     /// Lists the other tabs in Go to Anything as "Move pane to …" rows.
     fn swarm_choose_tab_for_pane(&mut self, ctx: &mut ViewContext<Self>) {
-        self.swarm_set_pane_move_targets(ctx);
         if self.tabs.len() < 2 {
             self.swarm_alert("No other tab", "Open another tab first, or use Move Pane to New Tab.", ctx);
             return;
         }
         self.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+        self.swarm_set_pane_move_targets(ctx);
         self.palette.update(ctx, |palette, ctx| palette.insert_query_text("move pane to ", ctx));
     }
 
@@ -16627,6 +16671,10 @@ impl Workspace {
                 }
                 _ => {
                     self.open_navigation_palette(ctx);
+                    // The "cd …" and "rename pane to …" rows are for the menu items that set these.
+                    *crate::swarm::CD_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    *crate::swarm::PANE_RENAME_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                    self.swarm_set_pane_move_targets(ctx);
                     #[cfg(unix)]
                     self.swarm_refresh_ports(ctx);
                 }
@@ -27579,6 +27627,8 @@ impl TypedActionView for Workspace {
             }
             SwarmImportTheme => self.swarm_import_theme(ctx),
             SwarmChoosePaneName => self.swarm_choose_pane_name(ctx),
+            SwarmChooseDirectory => self.swarm_choose_directory(ctx),
+            SwarmCdTo { warp_session_id, host, path } => self.swarm_cd_to(*warp_session_id, host.clone(), path.clone(), ctx),
             #[cfg(unix)]
             SwarmRenamePane { warp_session_id, name } => {
                 warp_terminal::local_tty::daemon::name_sessions(vec![*warp_session_id], name.clone());
