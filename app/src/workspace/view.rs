@@ -1073,6 +1073,9 @@ pub struct Workspace {
     swarm_nav_forward: Vec<(EntityId, PaneId)>,
     /// A Back or Forward is switching tabs: don't record it as a new step.
     swarm_navigating: bool,
+    /// When the active tab was shown: only tabs the user stayed on count as
+    /// steps (restoring, moving or closing tabs switches through others).
+    swarm_tab_shown_at: std::time::Instant,
     tips_completed: ModelHandle<TipsCompleted>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
     server_api: Arc<ServerApi>,
@@ -3508,6 +3511,7 @@ impl Workspace {
             swarm_nav_back: Vec::new(),
             swarm_nav_forward: Vec::new(),
             swarm_navigating: false,
+            swarm_tab_shown_at: std::time::Instant::now(),
             tips_completed,
             user_default_shell_unsupported_banner_model_handle,
             server_api,
@@ -5691,9 +5695,22 @@ impl Workspace {
             self.mark_swarm_tab_seen(index, true, ctx);
         }
         // swarm-term: remember where the user was, for Navigate Back.
+        let stayed = self.swarm_tab_shown_at.elapsed() >= SWARM_NAV_MIN_STAY;
+        if index != self.active_tab_index {
+            log::debug!(
+                "swarm: nav tab {} -> {index} (stayed {stayed}, navigating {}, back {}, forward {})",
+                self.active_tab_index,
+                self.swarm_navigating,
+                self.swarm_nav_back.len(),
+                self.swarm_nav_forward.len()
+            );
+            self.swarm_tab_shown_at = std::time::Instant::now();
+        }
         if index != self.active_tab_index
+            && stayed
             && !self.swarm_navigating
             && let Some(entry) = self.swarm_nav_entry(self.active_tab_index, ctx)
+            && self.swarm_nav_back.last().map(|(group, _)| *group) != Some(entry.0)
         {
             self.swarm_nav_back.push(entry);
             if self.swarm_nav_back.len() > SWARM_NAV_HISTORY {
@@ -6783,8 +6800,17 @@ impl Workspace {
     fn swarm_navigate(&mut self, back: bool, ctx: &mut ViewContext<Self>) {
         loop {
             let entry = if back { self.swarm_nav_back.pop() } else { self.swarm_nav_forward.pop() };
-            let Some((group_id, pane_id)) = entry else { return };
+            let Some((group_id, pane_id)) = entry else {
+                log::debug!("swarm: nav {} with nothing left", if back { "back" } else { "forward" });
+                return;
+            };
             let Some(index) = self.tabs.iter().position(|t| t.pane_group.id() == group_id) else { continue };
+            log::debug!(
+                "swarm: nav {} to tab {index} (back {}, forward {})",
+                if back { "back" } else { "forward" },
+                self.swarm_nav_back.len(),
+                self.swarm_nav_forward.len()
+            );
             if index == self.active_tab_index {
                 continue;
             }
@@ -31674,6 +31700,10 @@ fn swarm_tab_bar_host_label(name: &str, swatch: Fill, appearance: &Appearance) -
 /// swarm-term: the tab strip under the title row while the sidebar is hidden.
 /// swarm-term: how many tabs Navigate Back remembers.
 const SWARM_NAV_HISTORY: usize = 50;
+/// swarm-term: how long a tab must be shown to count as a Back step: longer
+/// than the bursts of switches the app makes itself (restoring, moving or
+/// closing tabs), shorter than a person hopping through tabs with ⌘1…⌘9.
+const SWARM_NAV_MIN_STAY: std::time::Duration = std::time::Duration::from_millis(250);
 const SWARM_TAB_STRIP_HEIGHT: f32 = 48.;
 const SWARM_TAB_STRIP_PADDING: f32 = 10.;
 

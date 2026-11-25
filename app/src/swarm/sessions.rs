@@ -104,6 +104,8 @@ pub struct SessionStatus {
     pub program: Option<String>,
     /// The user muted it: no notifications, not counted in the Dock badge.
     pub muted: bool,
+    /// The user marked it unread: it shows as having news until opened.
+    pub marked_unread: bool,
 }
 
 impl SessionStatus {
@@ -125,6 +127,20 @@ impl SessionStatus {
     /// The line under the name: what it runs, how it ended (after
     /// `last_command`, when known), or where it is.
     pub fn detail(&self, last_command: Option<String>) -> String {
+        let mut detail = self.base_detail(last_command);
+        // What the user set on it, so it can be seen at a glance.
+        for (on, what) in [(self.marked_unread, "marked unread"), (self.muted, "muted")] {
+            if on {
+                if !detail.is_empty() {
+                    detail.push_str(" · ");
+                }
+                detail.push_str(what);
+            }
+        }
+        detail
+    }
+
+    fn base_detail(&self, last_command: Option<String>) -> String {
         if let Some(program) = &self.program {
             return program.clone();
         }
@@ -161,6 +177,9 @@ impl SessionStatus {
         }
         if self.muted {
             text.push_str(", muted");
+        }
+        if self.marked_unread {
+            text.push_str(", marked unread");
         }
         text
     }
@@ -574,6 +593,7 @@ impl SwarmSessions {
             ended: ended_label(session),
             program: headline.map(record_text),
             muted: is_muted(session),
+            marked_unread: daemon::is_marked_unread(&session.id),
         })
     }
 
@@ -723,6 +743,7 @@ mod tests {
             ended: None,
             program: None,
             muted: false,
+            marked_unread: false,
         }
     }
 
@@ -732,6 +753,9 @@ mod tests {
         s.command = Some("claude".to_string());
         s.program = Some("Needs you: Run npm install?".to_string());
         assert_eq!(s.detail(None), "Needs you: Run npm install?");
+        s.muted = true;
+        s.marked_unread = true;
+        assert_eq!(s.detail(None), "Needs you: Run npm install? · marked unread · muted");
     }
 
     #[test]
