@@ -36,6 +36,41 @@ const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 pub struct Staged {
     staged: PathBuf,
     bundle: PathBuf,
+    version: String,
+}
+
+impl Staged {
+    pub fn version(&self) -> &str {
+        &self.version
+    }
+}
+
+/// An update downloaded in the background and not installed yet. Quitting Swarm installs it.
+static PENDING: std::sync::Mutex<Option<Staged>> = std::sync::Mutex::new(None);
+
+/// Keeps `staged` to install later, replacing any earlier one.
+pub fn set_pending(staged: Staged) {
+    *PENDING.lock().unwrap_or_else(|e| e.into_inner()) = Some(staged);
+}
+
+/// The version of the update waiting to be installed, if any.
+pub fn pending_version() -> Option<String> {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|s| s.version.clone())
+}
+
+/// Takes the update waiting to be installed.
+pub fn take_pending() -> Option<Staged> {
+    PENDING.lock().unwrap_or_else(|e| e.into_inner()).take()
+}
+
+/// Swaps in the waiting update as Swarm quits, without starting it again: the next launch is
+/// the new version.
+pub fn install_pending_on_quit() {
+    let Some(staged) = take_pending() else { return };
+    match swap(&staged) {
+        Ok(()) => log::info!("Installed Swarm {} on quit", staged.version),
+        Err(e) => log::warn!("Couldn't install Swarm {} on quit: {e:#}", staged.version),
+    }
 }
 
 /// The running Swarm.app, if this process runs from one that can replace itself.
@@ -84,17 +119,24 @@ pub async fn download(update: &Update) -> Result<Staged> {
     .context("the install task stopped")?
 }
 
-/// Swaps the staged update in for the installed app and starts it once this
-/// process exits. The caller then quits the app.
-pub fn install(staged: Staged) -> Result<()> {
+fn swap(staged: &Staged) -> Result<()> {
     let from = CString::new(staged.staged.as_os_str().as_bytes())?;
     let to = CString::new(staged.bundle.as_os_str().as_bytes())?;
     // SAFETY: both are valid NUL-terminated paths.
     if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_SWAP) } != 0 {
         return Err(std::io::Error::last_os_error()).context("swap in the new Swarm.app");
     }
+    Ok(())
+}
+
+/// Swaps the staged update in for the installed app and starts it once this
+/// process exits. The caller then quits the app. With `background`, the new
+/// version opens without coming to the front.
+pub fn install(staged: Staged, background: bool) -> Result<()> {
+    swap(&staged)?;
+    let open_flags = if background { "-n -g" } else { "-n" };
     let wait_then_open = format!(
-        "while kill -0 {} 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open -n \"$@\"",
+        "while kill -0 {} 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open {open_flags} \"$@\"",
         std::process::id()
     );
     // `open` starts the app without this process's environment; an instance
@@ -175,7 +217,7 @@ fn stage(dmg: &Path, bundle: &Path, version: &str) -> Result<Staged> {
     if checked.is_err() {
         let _ = std::fs::remove_dir_all(&staged);
     }
-    checked.map(|()| Staged { staged, bundle: bundle.to_path_buf() })
+    checked.map(|()| Staged { staged, bundle: bundle.to_path_buf(), version: version.to_string() })
 }
 
 fn check_staged(staged: &Path, bundle: &Path, version: &str) -> Result<()> {

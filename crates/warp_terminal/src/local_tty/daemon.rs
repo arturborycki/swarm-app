@@ -21,7 +21,8 @@ use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use instant::Instant;
-use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size, VERSION};
+pub use swarm_client::swarm_proto::VERSION;
+use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size};
 use swarm_client::{strip_terminal_responses, Attachment, Client, StreamEvent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
