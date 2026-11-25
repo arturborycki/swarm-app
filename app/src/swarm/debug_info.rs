@@ -53,11 +53,12 @@ impl Report {
             out.push(match status {
                 Ok(s) => {
                     let mut line = format!(
-                        "Daemon on {place}: swarmd {} on {} ({}), {} sessions ({} running, {} detached), start {}",
+                        "Daemon on {place}: swarmd {} on {} ({}), {} session{} ({} running, {} detached), start {}",
                         s.version,
                         s.hostname,
                         s.os,
                         s.sessions,
+                        if s.sessions == 1 { "" } else { "s" },
                         s.running,
                         s.detached,
                         if s.at_login { "at login" } else { "on demand" }

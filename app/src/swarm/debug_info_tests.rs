@@ -70,3 +70,22 @@ fn report_without_a_check_says_so() {
     assert!(text.contains("Last update check: none yet in this run\n"));
     assert!(!text.contains("waiting to install"));
 }
+
+#[test]
+fn one_session_is_singular() {
+    let report = Report {
+        app_version: "1".into(),
+        build: "1+x".into(),
+        arch: "x86_64",
+        bundle: "/Applications/Swarm.app".into(),
+        self_update: Ok(()),
+        download_in_background: false,
+        install_when_idle: false,
+        last_check: None,
+        pending_update: None,
+        env: vec![],
+        daemons: vec![(None, Ok(DaemonStatus { sessions: 1, running: 1, detached: 1, ..status("1+x") }))],
+        home: None,
+    };
+    assert!(report.to_text(SystemTime::now()).contains(", 1 session (1 running, 1 detached),"));
+}
