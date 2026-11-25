@@ -45,6 +45,9 @@ pub const META_AUTO_ATTACH: &str = "auto_attach";
 pub const META_TAB_ORDER: &str = "tab_order";
 /// The tab group a session's tab is in: its name, or `#<id>` for an unnamed one.
 pub const META_GROUP: &str = "group";
+/// "1" when the user muted the session: its program's news sends no
+/// notification and doesn't count in the Dock badge.
+pub const META_MUTED: &str = "muted";
 
 /// Warp session ids of shells this app re-attached to. Their shell setup
 /// already ran, so a replayed `InitShell` hook must not run it again.
@@ -350,6 +353,81 @@ async fn watch_once(
     }
 }
 
+pub use swarm_client::swarm_proto::{BlockedKind, ProgramStatus, StatusRecord, StatusState};
+
+/// Calls `on_change` with what the programs in `host`'s sessions report about
+/// themselves (OSC 7501 status, notifications, bells), now and after every
+/// change, reconnecting as needed. Only daemons of this app's own build are
+/// asked: an older one drops the connection on the request, and the app
+/// brings daemons up to its build as it connects anyway. Stops once
+/// `on_change` returns `false`.
+pub fn watch_status(
+    host: Option<String>,
+    on_change: impl Fn(Vec<(String, ProgramStatus)>) -> bool + Send + Sync + 'static,
+) {
+    let Some(daemons) = daemons() else { return };
+    daemons.rt.spawn(async move {
+        loop {
+            let wait = match watch_status_once(daemons, host.as_deref(), &on_change).await {
+                Ok(Some(false)) => return,
+                Ok(Some(true)) => Duration::from_secs(2),
+                // Another build: look again soon; the app updates the daemon
+                // as it connects, and that check is only a version compare.
+                Ok(None) => Duration::from_secs(5),
+                Err(e) => {
+                    log::debug!("swarm: status watch ({host:?}): {e:#}");
+                    Duration::from_secs(2)
+                }
+            };
+            tokio::time::sleep(wait).await;
+        }
+    });
+}
+
+/// One connection's worth. `Ok(None)`: the daemon is another build.
+async fn watch_status_once(
+    daemons: &Daemons,
+    host: Option<&str>,
+    on_change: &impl Fn(Vec<(String, ProgramStatus)>) -> bool,
+) -> Result<Option<bool>> {
+    let client = daemons.client(host).await?;
+    if client.daemon().version != VERSION {
+        return Ok(None);
+    }
+    let mut changes = client.subscribe_status().await?;
+    loop {
+        if !on_change(client.status().await?) {
+            return Ok(Some(false));
+        }
+        if let Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) =
+            tokio::time::timeout(Duration::from_secs(5), changes.recv()).await
+        {
+            return Ok(Some(true));
+        }
+        // Coalesce bursts (a progress bar) into one refresh.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while changes.try_recv().is_ok() {}
+    }
+}
+
+/// The user has seen daemon session `id` on `host`: its `done` and `error`
+/// reports and last notification are dropped, in the background.
+pub fn clear_status(host: Option<String>, id: String) {
+    let Some(daemons) = daemons() else { return };
+    daemons.rt.spawn(async move {
+        let result = async {
+            let client = daemons.client(host.as_deref()).await?;
+            if client.daemon().version != VERSION {
+                return Ok(());
+            }
+            client.clear_status(&id).await
+        };
+        if let Err(e) = result.await {
+            log::debug!("swarm: clearing status of {id}: {e:#}");
+        }
+    });
+}
+
 /// Marks the daemon sessions behind these Warp session ids as not reopening
 /// (`auto_attach=false`), in the background: the user closed their tabs.
 pub fn forget_sessions(warp_session_ids: Vec<u64>) {
@@ -370,6 +448,16 @@ pub fn name_sessions(warp_session_ids: Vec<u64>, name: Option<String>) {
 pub fn group_sessions(warp_session_ids: Vec<u64>, group: String) {
     let mut ui = BTreeMap::new();
     ui.insert(META_GROUP.to_string(), group);
+    update_sessions(warp_session_ids, swarm_client::swarm_proto::MetaUpdate { name: None, ui });
+}
+
+/// Mutes (or unmutes) the daemon sessions behind these Warp session ids, in
+/// the background. Kept by the daemon, so every window and the next launch
+/// see it.
+pub fn mute_sessions(warp_session_ids: Vec<u64>, muted: bool) {
+    let mut ui = BTreeMap::new();
+    // An empty value removes the key.
+    ui.insert(META_MUTED.to_string(), if muted { "1".to_string() } else { String::new() });
     update_sessions(warp_session_ids, swarm_client::swarm_proto::MetaUpdate { name: None, ui });
 }
 
@@ -745,6 +833,8 @@ const ATTACH_GRACE: Duration = Duration::from_secs(5);
 struct UnseenOutput {
     sessions: std::collections::HashSet<String>,
     quiet_until: HashMap<String, Instant>,
+    /// Marked unread by the user: stays unseen until its tab is opened.
+    flagged: std::collections::HashSet<String>,
 }
 
 /// Calls `f(session id)` (on a daemon thread) when a session prints output
@@ -762,8 +852,30 @@ pub fn has_unseen_output(id: &str) -> bool {
 /// until now); output in the next moment doesn't count as new either.
 pub fn mark_output_seen(id: &str) {
     let mut unseen = UNSEEN.lock().unwrap();
-    unseen.sessions.remove(id);
+    if !unseen.flagged.contains(id) {
+        unseen.sessions.remove(id);
+    }
     unseen.quiet_until.insert(id.to_string(), Instant::now() + SEEN_GRACE);
+}
+
+/// The user opened daemon session `id`'s tab: it's seen, even if it was
+/// marked unread.
+pub fn mark_output_opened(id: &str) {
+    UNSEEN.lock().unwrap().flagged.remove(id);
+    mark_output_seen(id);
+}
+
+/// The user marked daemon session `id` unread: it shows as having news until
+/// its tab is opened again.
+pub fn mark_output_unread(id: &str) {
+    let mut unseen = UNSEEN.lock().unwrap();
+    unseen.flagged.insert(id.to_string());
+    unseen.sessions.insert(id.to_string());
+}
+
+/// Whether the user marked daemon session `id` unread.
+pub fn is_marked_unread(id: &str) -> bool {
+    UNSEEN.lock().unwrap().flagged.contains(id)
 }
 
 fn quiet_output(id: &str, grace: Duration) {
@@ -788,6 +900,7 @@ fn forget_output(id: &str) {
     let mut unseen = UNSEEN.lock().unwrap();
     unseen.sessions.remove(id);
     unseen.quiet_until.remove(id);
+    unseen.flagged.remove(id);
 }
 
 async fn reconnect(

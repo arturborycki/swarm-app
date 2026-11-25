@@ -1067,6 +1067,15 @@ pub struct Workspace {
     pane_rename_editor: ViewHandle<EditorView>,
     tab_group_rename_editor: ViewHandle<EditorView>,
     vertical_tabs_search_input: ViewHandle<EditorView>,
+    /// swarm-term: tabs (and their focused pane) shown before the current one,
+    /// most recent last, for Navigate Back; and those Back left, for Forward.
+    swarm_nav_back: Vec<(EntityId, PaneId)>,
+    swarm_nav_forward: Vec<(EntityId, PaneId)>,
+    /// A Back or Forward is switching tabs: don't record it as a new step.
+    swarm_navigating: bool,
+    /// When the active tab was shown: only tabs the user stayed on count as
+    /// steps (restoring, moving or closing tabs switches through others).
+    swarm_tab_shown_at: std::time::Instant,
     tips_completed: ModelHandle<TipsCompleted>,
     user_default_shell_unsupported_banner_model_handle: ModelHandle<BannerState>,
     server_api: Arc<ServerApi>,
@@ -2761,6 +2770,9 @@ impl Workspace {
             if let crate::swarm::sessions::SwarmSessionsEvent::Attention { title, body } = event {
                 me.notify_swarm_attention(title.clone(), body.clone(), ctx);
             }
+            if let crate::swarm::sessions::SwarmSessionsEvent::Program { daemon_id, warp_session_id, title, body } = event {
+                me.on_swarm_program(daemon_id, *warp_session_id, title.clone(), body.clone(), ctx);
+            }
             me.sync_swarm_tab_names(ctx);
             me.settle_swarm_local_tabs(ctx);
             #[cfg(target_os = "macos")]
@@ -3496,6 +3508,10 @@ impl Workspace {
             pane_rename_editor: Self::pane_rename_editor(ctx),
             tab_group_rename_editor: Self::tab_group_rename_editor(ctx),
             vertical_tabs_search_input: Self::vertical_tabs_search_input(ctx),
+            swarm_nav_back: Vec::new(),
+            swarm_nav_forward: Vec::new(),
+            swarm_navigating: false,
+            swarm_tab_shown_at: std::time::Instant::now(),
             tips_completed,
             user_default_shell_unsupported_banner_model_handle,
             server_api,
@@ -5672,11 +5688,35 @@ impl Workspace {
         };
 
         // swarm-term: the tab being left was seen up to now, and the one
-        // being shown is about to be.
+        // being shown is about to be (which also clears "marked unread").
         #[cfg(unix)]
         {
-            self.mark_swarm_tab_seen(self.active_tab_index, ctx);
-            self.mark_swarm_tab_seen(index, ctx);
+            self.mark_swarm_tab_seen(self.active_tab_index, false, ctx);
+            self.mark_swarm_tab_seen(index, true, ctx);
+        }
+        // swarm-term: remember where the user was, for Navigate Back.
+        let stayed = self.swarm_tab_shown_at.elapsed() >= SWARM_NAV_MIN_STAY;
+        if index != self.active_tab_index {
+            log::debug!(
+                "swarm: nav tab {} -> {index} (stayed {stayed}, navigating {}, back {}, forward {})",
+                self.active_tab_index,
+                self.swarm_navigating,
+                self.swarm_nav_back.len(),
+                self.swarm_nav_forward.len()
+            );
+            self.swarm_tab_shown_at = std::time::Instant::now();
+        }
+        if index != self.active_tab_index
+            && stayed
+            && !self.swarm_navigating
+            && let Some(entry) = self.swarm_nav_entry(self.active_tab_index, ctx)
+            && self.swarm_nav_back.last().map(|(group, _)| *group) != Some(entry.0)
+        {
+            self.swarm_nav_back.push(entry);
+            if self.swarm_nav_back.len() > SWARM_NAV_HISTORY {
+                self.swarm_nav_back.remove(0);
+            }
+            self.swarm_nav_forward.clear();
         }
         self.active_tab_index = index;
 
@@ -6590,16 +6630,33 @@ impl Workspace {
     /// has notifications on.
     #[cfg(unix)]
     fn notify_swarm_attention(&mut self, title: String, body: String, ctx: &mut ViewContext<Self>) {
-        let settings = &SessionSettings::as_ref(ctx).notifications;
-        if settings.mode != NotificationsMode::Enabled || !settings.is_needs_attention_enabled {
+        let settings = SessionSettings::as_ref(ctx).notifications.value().clone();
+        // Sessions needing the user is what Swarm's notifications are for, so
+        // they're on until the user turns them off: the first one turns them
+        // on and asks macOS for permission. Only an explicit "off" (or the
+        // needs-attention switch) keeps them quiet.
+        if settings.mode == NotificationsMode::Disabled || !settings.is_needs_attention_enabled {
             return;
         }
         let front = ctx.windows().active_window().or_else(|| ctx.windows().frontmost_window_id());
         if front.is_some_and(|w| w != ctx.window_id()) {
             return;
         }
-        let play_sound = settings.play_notification_sound;
-        ctx.send_desktop_notification(UserNotification::new_with_sound(title, body, None, play_sound), |_, _, _| {});
+        let notification = UserNotification::new_with_sound(title, body, None, settings.play_notification_sound);
+        if settings.mode == NotificationsMode::Enabled {
+            ctx.send_desktop_notification(notification, |_, _, _| {});
+            return;
+        }
+        SessionSettings::handle(ctx).update(ctx, |s, ctx| {
+            let enabled = NotificationsSettings { mode: NotificationsMode::Enabled, ..settings.clone() };
+            if let Err(e) = s.notifications.set_value(enabled, ctx) {
+                log::warn!("swarm: couldn't turn notifications on: {e:#}");
+            }
+        });
+        ctx.request_desktop_notification_permissions(move |_, outcome, ctx| match outcome {
+            RequestPermissionsOutcome::Accepted => ctx.send_desktop_notification(notification, |_, _, _| {}),
+            other => log::info!("swarm: notifications not allowed: {other:?}"),
+        });
     }
 
     #[cfg(not(unix))]
@@ -6648,17 +6705,152 @@ impl Workspace {
         }
     }
 
-    /// Marks the output of the sessions in tab `index` as seen.
+    /// A session's program needs the user, finished, failed or asked for a
+    /// notification. If this window is in front showing it, the user has
+    /// seen it; otherwise they're told (by the frontmost window only).
     #[cfg(unix)]
-    fn mark_swarm_tab_seen(&self, index: usize, ctx: &AppContext) {
-        let Some(tab) = self.tabs.get(index) else {
+    fn on_swarm_program(
+        &mut self,
+        daemon_id: &str,
+        warp_session_id: Option<u64>,
+        title: String,
+        body: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        let in_front = ctx.windows().active_window() == Some(ctx.window_id());
+        let showing = warp_session_id.is_some_and(|wid| {
+            self.active_tab_pane_group()
+                .as_ref(ctx)
+                .terminal_views(ctx)
+                .iter()
+                .any(|view| view.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) == Some(wid))
+        });
+        if in_front && showing {
+            crate::swarm::sessions::SwarmSessions::as_ref(ctx).mark_program_seen(daemon_id);
             return;
-        };
+        }
+        self.notify_swarm_attention(title, body, ctx);
+    }
+
+    #[cfg(not(unix))]
+    fn on_swarm_program(
+        &mut self,
+        _daemon_id: &str,
+        _warp_session_id: Option<u64>,
+        _title: String,
+        _body: String,
+        _ctx: &mut ViewContext<Self>,
+    ) {
+    }
+
+    /// Marks the output of the sessions in tab `index` as seen, and what
+    /// their programs reported (finished, failed, notifications). `opened`:
+    /// the tab is being shown, which also ends "marked unread"; a tab being
+    /// left keeps that mark.
+    #[cfg(unix)]
+    fn mark_swarm_tab_seen(&self, index: usize, opened: bool, ctx: &AppContext) {
         let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
-        for view in tab.pane_group.as_ref(ctx).terminal_views(ctx) {
-            if let Some(id) = view.as_ref(ctx).active_block_session_id().and_then(|id| sessions.daemon_id_for(id.as_u64())) {
+        for id in self.swarm_tab_daemon_ids(index, ctx) {
+            if opened {
+                warp_terminal::local_tty::daemon::mark_output_opened(&id);
+            } else {
                 warp_terminal::local_tty::daemon::mark_output_seen(&id);
             }
+            sessions.mark_program_seen(&id);
+        }
+    }
+
+    /// The daemon ids of the sessions in tab `index`'s terminals.
+    #[cfg(unix)]
+    fn swarm_tab_daemon_ids(&self, index: usize, ctx: &AppContext) -> Vec<String> {
+        let Some(tab) = self.tabs.get(index) else {
+            return Vec::new();
+        };
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+        tab.pane_group
+            .as_ref(ctx)
+            .terminal_views(ctx)
+            .iter()
+            .filter_map(|view| view.as_ref(ctx).active_block_session_id().and_then(|id| sessions.daemon_id_for(id.as_u64())))
+            .collect()
+    }
+
+    /// The Warp session ids of tab `index`'s terminals.
+    fn swarm_tab_warp_ids(&self, index: usize, ctx: &AppContext) -> Vec<u64> {
+        let Some(tab) = self.tabs.get(index) else {
+            return Vec::new();
+        };
+        tab.pane_group
+            .as_ref(ctx)
+            .terminal_views(ctx)
+            .iter()
+            .filter_map(|view| view.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()))
+            .collect()
+    }
+
+    /// Where tab `index` is, for Navigate Back/Forward: its pane group and
+    /// focused pane.
+    fn swarm_nav_entry(&self, index: usize, ctx: &AppContext) -> Option<(EntityId, PaneId)> {
+        let tab = self.tabs.get(index)?;
+        Some((tab.pane_group.id(), tab.pane_group.as_ref(ctx).focused_pane_id(ctx)))
+    }
+
+    /// Navigate Back (`back`) or Forward: shows the next remembered tab that
+    /// still exists, and focuses the pane that was focused there.
+    fn swarm_navigate(&mut self, back: bool, ctx: &mut ViewContext<Self>) {
+        loop {
+            let entry = if back { self.swarm_nav_back.pop() } else { self.swarm_nav_forward.pop() };
+            let Some((group_id, pane_id)) = entry else {
+                log::debug!("swarm: nav {} with nothing left", if back { "back" } else { "forward" });
+                return;
+            };
+            let Some(index) = self.tabs.iter().position(|t| t.pane_group.id() == group_id) else { continue };
+            log::debug!(
+                "swarm: nav {} to tab {index} (back {}, forward {})",
+                if back { "back" } else { "forward" },
+                self.swarm_nav_back.len(),
+                self.swarm_nav_forward.len()
+            );
+            if index == self.active_tab_index {
+                continue;
+            }
+            if let Some(current) = self.swarm_nav_entry(self.active_tab_index, ctx) {
+                if back { self.swarm_nav_forward.push(current) } else { self.swarm_nav_back.push(current) }
+            }
+            self.swarm_navigating = true;
+            self.activate_tab(index, ctx);
+            self.swarm_navigating = false;
+            let pane_group = self.tabs[index].pane_group.clone();
+            if pane_group.as_ref(ctx).visible_pane_ids().contains(&pane_id) {
+                pane_group.update(ctx, |pg, ctx| pg.focus_pane_by_id(pane_id, ctx));
+            }
+            return;
+        }
+    }
+
+    /// Shows the sessions sidebar if it's hidden and puts the cursor in its
+    /// filter field.
+    fn swarm_focus_session_filter(&mut self, ctx: &mut ViewContext<Self>) {
+        let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
+        if !sidebar_shown {
+            self.toggle_vertical_tabs_panel(ctx);
+        }
+        ctx.focus(&self.vertical_tabs_search_input);
+        ctx.notify();
+    }
+
+    /// Moves the focused pane of the active tab to a new tab right after it,
+    /// in the same group. Nothing happens with a single pane.
+    fn swarm_move_pane_to_new_tab(&mut self, ctx: &mut ViewContext<Self>) {
+        let index = self.active_tab_index;
+        let pane_group = self.tabs[index].pane_group.clone();
+        if pane_group.as_ref(ctx).visible_pane_ids().len() < 2 {
+            return;
+        }
+        let pane_id = pane_group.as_ref(ctx).focused_pane_id(ctx);
+        let group_id = self.tabs[index].group_id;
+        if let Some(pane) = pane_group.update(ctx, |pg, ctx| pg.remove_pane_for_move(&pane_id, ctx)) {
+            self.add_tab_from_existing_pane(pane, index + 1, group_id, ctx);
         }
     }
 
@@ -26837,6 +27029,34 @@ impl TypedActionView for Workspace {
                 #[cfg(unix)]
                 self.toggle_swarm_picker(ctx);
             }
+            SwarmToggleMute => {
+                #[cfg(unix)]
+                {
+                    let ids = self.swarm_tab_warp_ids(self.active_tab_index, ctx);
+                    if let Some(all_muted) = crate::swarm::sessions::SwarmSessions::as_ref(ctx).all_muted(&ids) {
+                        warp_terminal::local_tty::daemon::mute_sessions(ids, !all_muted);
+                    }
+                }
+            }
+            SwarmMarkUnread => {
+                #[cfg(unix)]
+                for id in self.swarm_tab_daemon_ids(self.active_tab_index, ctx) {
+                    warp_terminal::local_tty::daemon::mark_output_unread(&id);
+                }
+                ctx.notify();
+            }
+            SwarmNavigateBack => self.swarm_navigate(true, ctx),
+            SwarmNavigateForward => self.swarm_navigate(false, ctx),
+            SwarmFocusSessionFilter => self.swarm_focus_session_filter(ctx),
+            SwarmCloseOtherPanes => {
+                let pane_group = self.active_tab_pane_group().clone();
+                pane_group.update(ctx, |pg, ctx| pg.close_other_panes(ctx));
+            }
+            SwarmBalanceSplits => {
+                let pane_group = self.active_tab_pane_group().clone();
+                pane_group.update(ctx, |pg, ctx| pg.balance_panes(ctx));
+            }
+            SwarmMovePaneToNewTab => self.swarm_move_pane_to_new_tab(ctx),
             SwarmSplitWithTab { tab_index, direction } => {
                 // From the menu: split the session pane in focus.
                 let focused = self.tabs[self.active_tab_index].pane_group.as_ref(ctx).focused_pane_id(ctx);
@@ -31478,6 +31698,12 @@ fn swarm_tab_bar_host_label(name: &str, swatch: Fill, appearance: &Appearance) -
 }
 
 /// swarm-term: the tab strip under the title row while the sidebar is hidden.
+/// swarm-term: how many tabs Navigate Back remembers.
+const SWARM_NAV_HISTORY: usize = 50;
+/// swarm-term: how long a tab must be shown to count as a Back step: longer
+/// than the bursts of switches the app makes itself (restoring, moving or
+/// closing tabs), shorter than a person hopping through tabs with ⌘1…⌘9.
+const SWARM_NAV_MIN_STAY: std::time::Duration = std::time::Duration::from_millis(250);
 const SWARM_TAB_STRIP_HEIGHT: f32 = 48.;
 const SWARM_TAB_STRIP_PADDING: f32 = 10.;
 

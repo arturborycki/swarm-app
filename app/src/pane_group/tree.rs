@@ -533,6 +533,12 @@ impl PaneData {
         self.root.reset_pane_sizes(border_id)
     }
 
+    /// swarm-term: gives every split's panes equal shares. Returns whether
+    /// any size changed.
+    pub fn balance(&mut self) -> bool {
+        self.root.balance()
+    }
+
     pub fn adjust_pane_size_by_id(
         &mut self,
         pane_id: PaneId,
@@ -765,6 +771,21 @@ impl PaneNode {
         match self {
             PaneNode::Leaf(_) => false,
             PaneNode::Branch(branch) => branch.reset_pane_sizes(border_id),
+        }
+    }
+
+    fn balance(&mut self) -> bool {
+        match self {
+            PaneNode::Leaf(_) => false,
+            PaneNode::Branch(branch) => {
+                let mut changed = false;
+                for (flex, node) in &mut branch.nodes {
+                    changed |= flex.0 != DEFAULT_FLEX_VALUE;
+                    *flex = DEFAULT_FLEX_SIZE;
+                    changed |= node.balance();
+                }
+                changed
+            }
         }
     }
 

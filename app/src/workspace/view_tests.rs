@@ -5824,3 +5824,31 @@ fn test_tab_group_rename_blur_does_not_commit_unfinished_name() {
         });
     });
 }
+
+#[test]
+fn swarm_navigate_back_and_forward_walk_the_tabs_in_order() {
+    App::test((), |mut app| async move {
+        initialize_app(&mut app);
+        let workspace = mock_workspace(&mut app);
+        workspace.update(&mut app, |workspace, ctx| {
+            for _ in 0..3 {
+                workspace.add_terminal_tab(false, ctx);
+            }
+            // Visit 0, 1, 2, 3, staying on each long enough to count.
+            for index in 0..4 {
+                workspace.swarm_tab_shown_at = std::time::Instant::now() - std::time::Duration::from_secs(2);
+                workspace.activate_tab(index, ctx);
+            }
+            assert_eq!(workspace.active_tab_index, 3);
+            let mut visited = Vec::new();
+            for _ in 0..3 {
+                workspace.swarm_navigate(true, ctx);
+                visited.push(workspace.active_tab_index);
+            }
+            assert_eq!(visited, vec![2, 1, 0], "Back walks the tabs in the order they were shown");
+            workspace.swarm_navigate(false, ctx);
+            workspace.swarm_navigate(false, ctx);
+            assert_eq!(workspace.active_tab_index, 2, "Forward retraces Back");
+        });
+    })
+}
