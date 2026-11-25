@@ -681,6 +681,11 @@ impl View {
         });
     }
 
+    /// Runs the current query again, for data that arrived after it ran.
+    pub fn rerun_query(&mut self, ctx: &mut ViewContext<Self>) {
+        self.search_bar.update(ctx, |search_bar, ctx| search_bar.run_query(ctx));
+    }
+
     /// Inserts `query` into the search bar.
     pub fn insert_query_text(&mut self, query: &str, ctx: &mut ViewContext<Self>) {
         self.search_bar.update(ctx, |search_bar, ctx| {

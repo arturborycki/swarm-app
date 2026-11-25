@@ -2,7 +2,8 @@
 //! ⌘P or ⇧⌘P), next to the open tabs: open sessions by what their programs
 //! report ("needs you"), detached sessions on this Mac and connected hosts to
 //! reattach, "New session on …" for each host, and "New session in …" for
-//! the folders sessions use and for a typed path. Type to filter; Return opens.
+//! the folders sessions use and for a typed path, and "Open localhost:…" for
+//! ports that programs in sessions listen on. Type to filter; Return opens.
 
 use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use ordered_float::OrderedFloat;
@@ -77,6 +78,24 @@ impl SyncDataSource for DataSource {
                     format!("localhost:{local}"),
                     WorkspaceAction::SwarmStopForward { host, port: remote },
                 ));
+            }
+            // Ports programs in sessions listen on, such as a dev server:
+            // open it, forwarded first when it's on another host.
+            for (host, id, p) in daemon::detected_ports() {
+                let name = sessions
+                    .sessions_on(host.as_deref())
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.display_name().to_string())
+                    .unwrap_or_default();
+                let (label, detail) = match &host {
+                    None => (format!("Open localhost:{}", p.port), format!("{name} · {}", p.program)),
+                    Some(h) => (
+                        format!("Open port {} from {name}", p.port),
+                        format!("{h} · {} · forwarded to localhost", p.program),
+                    ),
+                };
+                items.push((label, detail, WorkspaceAction::SwarmOpenPort { host, port: p.port }));
             }
             // A typed folder on this Mac: "~/src/api" or "/tmp".
             if let Some(folder) = typed_folder(term) {
@@ -155,7 +174,7 @@ impl SyncDataSource for DataSource {
                 };
                 // Sessions that need you, then running sessions to reattach,
                 // come before starting new ones.
-                if matches!(action, WorkspaceAction::SwarmShowSession(_)) {
+                if matches!(action, WorkspaceAction::SwarmShowSession(_) | WorkspaceAction::SwarmOpenPort { .. }) {
                     match_result.score += 2;
                 }
                 if matches!(action, WorkspaceAction::SwarmReattach(_)) {

@@ -151,6 +151,9 @@ pub enum WorkspaceAction {
     SwarmForwardPort { host: String, port: u16 },
     /// swarm-term: end a port forward.
     SwarmStopForward { host: String, port: u16 },
+    /// swarm-term: open a port a session's program listens on in the browser:
+    /// directly on this Mac (`host` is `None`), else forwarded first.
+    SwarmOpenPort { host: Option<String>, port: u16 },
     /// swarm-term: choose files and type their paths into the focused session.
     SwarmInsertPath,
     /// swarm-term: copy mode in the focused session (keyboard selection).
@@ -1195,6 +1198,7 @@ impl WorkspaceAction {
             | SwarmShowSession(_)
             | SwarmForwardPort { .. }
             | SwarmStopForward { .. }
+            | SwarmOpenPort { .. }
             | SwarmInsertPath
             | SwarmCopyMode
             | SwarmQuickLook
