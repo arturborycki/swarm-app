@@ -1457,13 +1457,19 @@ pub async fn list_sessions(host: Option<&str>) -> Result<Vec<DaemonSession>> {
 
 /// Starts a login shell on `host`, marked as this app's and to reopen.
 pub async fn create_session(host: Option<&str>, cols: u16, rows: u16) -> Result<DaemonSession> {
+    create_session_in(host, None, cols, rows).await
+}
+
+/// Like [`create_session`], starting in folder `cwd` (on `host`); a folder
+/// that doesn't exist there falls back to the home folder.
+pub async fn create_session_in(host: Option<&str>, cwd: Option<String>, cols: u16, rows: u16) -> Result<DaemonSession> {
     let daemons = daemons().context("daemon sessions are off")?;
     let mut ui = BTreeMap::new();
     ui.insert(META_CREATED_BY.to_string(), "warp".to_string());
     ui.insert(META_AUTO_ATTACH.to_string(), "true".to_string());
     let opts = CreateOpts {
         command: Vec::new(),
-        cwd: None,
+        cwd,
         env: Vec::new(),
         size: Size { cols: cols.max(1), rows: rows.max(1) },
         name: None,

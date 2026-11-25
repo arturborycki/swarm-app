@@ -6918,10 +6918,16 @@ impl Workspace {
     /// Starts a login shell on `host` and opens it; Warp's setup is typed into it.
     #[cfg(unix)]
     fn new_swarm_session(&mut self, host: Option<String>, ctx: &mut ViewContext<Self>) {
+        self.new_swarm_session_in(host, None, ctx);
+    }
+
+    /// Starts a session on `host` in folder `cwd` (else its home) and opens it.
+    #[cfg(unix)]
+    fn new_swarm_session_in(&mut self, host: Option<String>, cwd: Option<String>, ctx: &mut ViewContext<Self>) {
         use warp_terminal::local_tty::daemon;
         let Some(daemons) = daemon::daemons() else { return };
         let target = host.clone();
-        let rx = daemons.run(async move { daemon::create_session(target.as_deref(), 120, 40).await });
+        let rx = daemons.run(async move { daemon::create_session_in(target.as_deref(), cwd, 120, 40).await });
         let _ = ctx.spawn(async move { rx.recv().await }, move |me, result, ctx| match result {
             Ok(Ok(session)) => {
                 let tab = crate::swarm::ReattachTab::for_session(host.as_deref(), &session);
@@ -27087,6 +27093,25 @@ impl TypedActionView for Workspace {
             SwarmNewSession { host } => {
                 #[cfg(unix)]
                 self.new_swarm_session(host.clone(), ctx);
+            }
+            SwarmNewSessionIn { host, cwd } => {
+                #[cfg(unix)]
+                self.new_swarm_session_in(host.clone(), Some(cwd.clone()), ctx);
+                #[cfg(not(unix))]
+                let _ = (host, cwd);
+            }
+            SwarmShowSession(warp_session_id) => {
+                let found = self.tabs.iter().enumerate().find_map(|(index, tab)| {
+                    let views = tab.pane_group.as_ref(ctx).terminal_views(ctx);
+                    let view = views.iter().find(|v| {
+                        v.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) == Some(*warp_session_id)
+                    })?;
+                    Some((index, view.clone()))
+                });
+                if let Some((index, view)) = found {
+                    self.activate_tab(index, ctx);
+                    ctx.focus(&view);
+                }
             }
             SwarmReattach(tab) => {
                 self.add_swarm_tab(tab, ctx);

@@ -1,6 +1,8 @@
-//! swarm-term: daemon sessions in the navigation palette (⇧⌘P), next to the
-//! open tabs: detached sessions on this Mac and connected hosts to reattach,
-//! and "New session on …" for each host. Type to filter; Return opens.
+//! swarm-term: daemon sessions in the navigation palette (Go to Anything,
+//! ⌘P or ⇧⌘P), next to the open tabs: open sessions by what their programs
+//! report ("needs you"), detached sessions on this Mac and connected hosts to
+//! reattach, "New session on …" for each host, and "New session in …" for
+//! the folders sessions use and for a typed path. Type to filter; Return opens.
 
 use fuzzy_match::{FuzzyMatchResult, match_indices_case_insensitive};
 use ordered_float::OrderedFloat;
@@ -58,8 +60,53 @@ impl SyncDataSource for DataSource {
                     WorkspaceAction::SwarmConnectHost(term.to_string()),
                 ));
             }
+            // A typed folder on this Mac: "~/src/api" or "/tmp".
+            if let Some(folder) = typed_folder(term) {
+                items.push((
+                    format!("New session in {term}"),
+                    "this Mac".to_string(),
+                    WorkspaceAction::SwarmNewSessionIn { host: None, cwd: folder },
+                ));
+            }
             for host in &hosts {
                 let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
+                // Open sessions whose programs report something, by state:
+                // typing "needs you" or "done" finds them.
+                for session in sessions.sessions_on(host.as_deref()) {
+                    let Some(warp_id) = session.ui.get(daemon::META_SESSION_ID).and_then(|v| v.parse::<u64>().ok())
+                    else {
+                        continue;
+                    };
+                    let Some(status) = sessions.status_for(warp_id) else { continue };
+                    let Some(program) = status.program.clone() else { continue };
+                    if session.clients.is_empty() {
+                        continue;
+                    }
+                    items.push((
+                        format!("Go to {} · {program}", status.display_name()),
+                        place.clone(),
+                        WorkspaceAction::SwarmShowSession(warp_id),
+                    ));
+                }
+                // Folders the host's sessions are in, for a new session there.
+                let mut folders: Vec<String> =
+                    sessions.sessions_on(host.as_deref()).iter().filter_map(|s| s.cwd.clone()).collect();
+                folders.sort();
+                folders.dedup();
+                for folder in folders {
+                    let shown = match host {
+                        None => crate::swarm::home_relative(&folder),
+                        Some(_) => crate::swarm::remote_home_relative(&folder),
+                    };
+                    if shown == "~" {
+                        continue;
+                    }
+                    items.push((
+                        format!("New session in {shown}"),
+                        place.clone(),
+                        WorkspaceAction::SwarmNewSessionIn { host: host.clone(), cwd: folder },
+                    ));
+                }
                 for session in sessions.sessions_on(host.as_deref()) {
                     if !session.is_running() || !session.clients.is_empty() {
                         continue;
@@ -88,7 +135,11 @@ impl SyncDataSource for DataSource {
                 } else {
                     match_indices_case_insensitive(&label, term)?
                 };
-                // Running sessions to reattach come before starting new ones.
+                // Sessions that need you, then running sessions to reattach,
+                // come before starting new ones.
+                if matches!(action, WorkspaceAction::SwarmShowSession(_)) {
+                    match_result.score += 2;
+                }
                 if matches!(action, WorkspaceAction::SwarmReattach(_)) {
                     match_result.score += 1;
                 }
@@ -99,6 +150,20 @@ impl SyncDataSource for DataSource {
             })
             .collect())
     }
+}
+
+/// `term` as a folder on this Mac, if it's a path ("~/src", "/tmp") to an
+/// existing folder.
+fn typed_folder(term: &str) -> Option<String> {
+    let path = if let Some(rest) = term.strip_prefix('~') {
+        let home = std::env::var("HOME").ok()?;
+        format!("{home}{rest}")
+    } else if term.starts_with('/') {
+        term.to_string()
+    } else {
+        return None;
+    };
+    std::path::Path::new(&path).is_dir().then_some(path)
 }
 
 #[derive(Debug)]
@@ -163,7 +228,15 @@ impl crate::search::item::SearchItem for SearchItem {
 
 #[cfg(test)]
 mod tests {
-    use super::looks_like_host;
+    use super::{looks_like_host, typed_folder};
+
+    #[test]
+    fn typed_folders() {
+        assert_eq!(typed_folder("/tmp").as_deref(), Some("/tmp"));
+        assert!(typed_folder("~").is_some());
+        assert!(typed_folder("/no/such/folder/here").is_none());
+        assert!(typed_folder("tmp").is_none());
+    }
 
     #[test]
     fn host_like_queries() {

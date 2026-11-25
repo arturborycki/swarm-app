@@ -307,10 +307,18 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             .collect();
         file_menu_options.insert(2, swarm_new_session_on_host_menu());
         file_menu_options.insert(3, swarm_workspace_item_with_key("Open Session…", WorkspaceAction::SwarmShowPicker, Some("cmd-o")));
-        // The navigation palette finds open tabs and detached sessions on every host.
+        // Go to Anything: the navigation palette finds open tabs, sessions by
+        // state, detached sessions on every host and folders for new sessions.
         file_menu_options.insert(
             4,
-            swarm_relabel(updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx), "Find Tab or Session…"),
+            swarm_workspace_item_with_key(
+                "Go to Anything…",
+                WorkspaceAction::TogglePalette {
+                    mode: crate::palette::PaletteMode::Navigation,
+                    source: crate::server::telemetry::PaletteSource::Keybinding,
+                },
+                Some("cmd-p"),
+            ),
         );
         file_menu_options.extend([
             MenuItem::Separator,

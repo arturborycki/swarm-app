@@ -143,6 +143,10 @@ pub enum WorkspaceAction {
     SwarmConnectHost(String),
     /// swarm-term: start a session on a host (`None`: this Mac) and open it.
     SwarmNewSession { host: Option<String> },
+    /// swarm-term: start a session in folder `cwd` on a host and open it.
+    SwarmNewSessionIn { host: Option<String>, cwd: String },
+    /// swarm-term: show the tab holding this Warp session, and focus it.
+    SwarmShowSession(u64),
     /// swarm-term: retry lost remote connections now.
     SwarmRetryConnections,
     /// swarm-term: replace the ended daemon session behind this Warp session
@@ -1176,6 +1180,8 @@ impl WorkspaceAction {
             | SwarmShowConnect
             | SwarmConnectHost(_)
             | SwarmNewSession { .. }
+            | SwarmNewSessionIn { .. }
+            | SwarmShowSession(_)
             | SwarmRetryConnections
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
