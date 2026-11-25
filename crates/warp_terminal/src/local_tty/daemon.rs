@@ -350,6 +350,81 @@ async fn watch_once(
     }
 }
 
+pub use swarm_client::swarm_proto::{BlockedKind, ProgramStatus, StatusRecord, StatusState};
+
+/// Calls `on_change` with what the programs in `host`'s sessions report about
+/// themselves (OSC 7501 status, notifications, bells), now and after every
+/// change, reconnecting as needed. Only daemons of this app's own build are
+/// asked: an older one drops the connection on the request, and the app
+/// brings daemons up to its build as it connects anyway. Stops once
+/// `on_change` returns `false`.
+pub fn watch_status(
+    host: Option<String>,
+    on_change: impl Fn(Vec<(String, ProgramStatus)>) -> bool + Send + Sync + 'static,
+) {
+    let Some(daemons) = daemons() else { return };
+    daemons.rt.spawn(async move {
+        loop {
+            let wait = match watch_status_once(daemons, host.as_deref(), &on_change).await {
+                Ok(Some(false)) => return,
+                Ok(Some(true)) => Duration::from_secs(2),
+                // Another build: look again soon; the app updates the daemon
+                // as it connects, and that check is only a version compare.
+                Ok(None) => Duration::from_secs(5),
+                Err(e) => {
+                    log::debug!("swarm: status watch ({host:?}): {e:#}");
+                    Duration::from_secs(2)
+                }
+            };
+            tokio::time::sleep(wait).await;
+        }
+    });
+}
+
+/// One connection's worth. `Ok(None)`: the daemon is another build.
+async fn watch_status_once(
+    daemons: &Daemons,
+    host: Option<&str>,
+    on_change: &impl Fn(Vec<(String, ProgramStatus)>) -> bool,
+) -> Result<Option<bool>> {
+    let client = daemons.client(host).await?;
+    if client.daemon().version != VERSION {
+        return Ok(None);
+    }
+    let mut changes = client.subscribe_status().await?;
+    loop {
+        if !on_change(client.status().await?) {
+            return Ok(Some(false));
+        }
+        if let Ok(Err(tokio::sync::broadcast::error::RecvError::Closed)) =
+            tokio::time::timeout(Duration::from_secs(5), changes.recv()).await
+        {
+            return Ok(Some(true));
+        }
+        // Coalesce bursts (a progress bar) into one refresh.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        while changes.try_recv().is_ok() {}
+    }
+}
+
+/// The user has seen daemon session `id` on `host`: its `done` and `error`
+/// reports and last notification are dropped, in the background.
+pub fn clear_status(host: Option<String>, id: String) {
+    let Some(daemons) = daemons() else { return };
+    daemons.rt.spawn(async move {
+        let result = async {
+            let client = daemons.client(host.as_deref()).await?;
+            if client.daemon().version != VERSION {
+                return Ok(());
+            }
+            client.clear_status(&id).await
+        };
+        if let Err(e) = result.await {
+            log::debug!("swarm: clearing status of {id}: {e:#}");
+        }
+    });
+}
+
 /// Marks the daemon sessions behind these Warp session ids as not reopening
 /// (`auto_attach=false`), in the background: the user closed their tabs.
 pub fn forget_sessions(warp_session_ids: Vec<u64>) {

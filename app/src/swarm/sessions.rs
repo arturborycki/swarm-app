@@ -22,6 +22,13 @@ pub struct SwarmSessions {
     /// An announcement of reconnecting tabs is scheduled.
     link_announcement_due: bool,
     tx: async_channel::Sender<(Host, Vec<DaemonSession>)>,
+    /// What the programs in each session report about themselves (OSC 7501),
+    /// by (host, session id), as each host's daemon last said.
+    statuses: BTreeMap<(Host, String), daemon::ProgramStatus>,
+    /// Hosts whose statuses have arrived once: what was already there when
+    /// the app started isn't news.
+    status_loaded: BTreeSet<Host>,
+    status_tx: async_channel::Sender<(Host, Vec<(String, daemon::ProgramStatus)>)>,
 }
 
 /// A session's state as tabs and the sidebar show it: each has its own shape
@@ -38,6 +45,10 @@ pub enum SessionMark {
     Exited,
     /// The tab lost its connection to the daemon and is retrying (⟳).
     Reconnecting,
+    /// Its program waits for the user: a permission, an answer or a login (✋).
+    Blocked,
+    /// Its program reported finishing, and the user hasn't looked yet (✓).
+    Done,
 }
 
 impl SessionMark {
@@ -56,6 +67,8 @@ impl SessionMark {
             SessionMark::Attention => (Icon::AlertCircle, colors.red.into()),
             SessionMark::Exited => (Icon::CircleRing, theme.disabled_ui_text_color()),
             SessionMark::Reconnecting => (Icon::Refresh, colors.yellow.into()),
+            SessionMark::Blocked => (Icon::Hand, colors.yellow.into()),
+            SessionMark::Done => (Icon::Check, colors.green.into()),
         }
     }
 }
@@ -86,6 +99,9 @@ pub struct SessionStatus {
     pub last_activity_ms: u64,
     /// How it ended ("exit 101", "killed by signal 9"), once it has.
     pub ended: Option<String>,
+    /// What its program reports, in a few words ("Needs you: Run npm
+    /// install?", "Working 40%"), while it reports something.
+    pub program: Option<String>,
 }
 
 impl SessionStatus {
@@ -107,6 +123,9 @@ impl SessionStatus {
     /// The line under the name: what it runs, how it ended (after
     /// `last_command`, when known), or where it is.
     pub fn detail(&self, last_command: Option<String>) -> String {
+        if let Some(program) = &self.program {
+            return program.clone();
+        }
         match (&self.ended, &self.command) {
             (Some(ended), _) => match last_command {
                 Some(command) => format!("{command} · {ended}"),
@@ -128,6 +147,12 @@ impl SessionStatus {
             (SessionMark::Attention, _) => text.push_str("needs attention"),
             (SessionMark::Exited, _) => text.push_str("ended"),
             (SessionMark::Reconnecting, _) => text.push_str("reconnecting"),
+            (SessionMark::Blocked, _) => text.push_str("needs you"),
+            (SessionMark::Done, _) => text.push_str("finished"),
+        }
+        if let Some(program) = &self.program {
+            text.push_str(", ");
+            text.push_str(program);
         }
         if self.elsewhere {
             text.push_str(", also open elsewhere");
@@ -143,6 +168,10 @@ pub enum SwarmSessionsEvent {
     /// A session printed output nobody has seen yet: the window showing it
     /// marks it seen, others show its tab as having news.
     Output { daemon_id: String, warp_session_id: u64 },
+    /// A session's program needs the user, finished, failed or asked for a
+    /// notification: the window showing it marks it seen; otherwise the user
+    /// is told (title, body).
+    Program { daemon_id: String, warp_session_id: Option<u64>, title: String, body: String },
 }
 
 impl SwarmSessions {
@@ -167,6 +196,9 @@ impl SwarmSessions {
             let _ = output_tx.try_send(id);
         });
         let _ = ctx.spawn_stream_local(output_rx, Self::on_unseen_output, |_, _| {});
+        // What programs report about themselves.
+        let (status_tx, status_rx) = async_channel::unbounded();
+        let _ = ctx.spawn_stream_local(status_rx, Self::on_statuses, |_, _| {});
         let me = SwarmSessions {
             by_host: BTreeMap::new(),
             loaded: BTreeSet::new(),
@@ -174,6 +206,9 @@ impl SwarmSessions {
             reconnecting: BTreeSet::new(),
             link_announcement_due: false,
             tx,
+            statuses: BTreeMap::new(),
+            status_loaded: BTreeSet::new(),
+            status_tx,
         };
         if super::use_daemon_sessions() {
             me.start_watching(None);
@@ -195,7 +230,105 @@ impl SwarmSessions {
     fn start_watching(&self, host: Host) {
         let tx = self.tx.clone();
         let key = host.clone();
-        daemon::watch_sessions(host, move |sessions| tx.try_send((key.clone(), sessions)).is_ok());
+        daemon::watch_sessions(host.clone(), move |sessions| tx.try_send((key.clone(), sessions)).is_ok());
+        let status_tx = self.status_tx.clone();
+        let key = host.clone();
+        daemon::watch_status(host, move |statuses| status_tx.try_send((key.clone(), statuses)).is_ok());
+    }
+
+    fn on_statuses(&mut self, (host, statuses): (Host, Vec<(String, daemon::ProgramStatus)>), ctx: &mut ModelContext<Self>) {
+        let first = self.status_loaded.insert(host.clone());
+        let mut news = Vec::new();
+        for (id, status) in &statuses {
+            let key = (host.clone(), id.clone());
+            let old = self.statuses.get(&key);
+            if !first && old != Some(status) {
+                news.extend(self.program_news(host.as_deref(), id, old, status));
+            }
+        }
+        let changed = self.statuses.iter().filter(|((h, _), _)| *h == host).count() != statuses.len()
+            || statuses.iter().any(|(id, st)| self.statuses.get(&(host.clone(), id.clone())) != Some(st));
+        self.statuses.retain(|(h, _), _| *h != host);
+        for (id, status) in statuses {
+            // Sessions that reported nothing aren't kept.
+            if status != daemon::ProgramStatus::default() {
+                self.statuses.insert((host.clone(), id), status);
+            }
+        }
+        for (daemon_id, title, body) in news {
+            announce(format!("{title}: {body}"), ctx);
+            let warp_session_id = self
+                .sessions_on(host.as_deref())
+                .iter()
+                .find(|s| s.id == daemon_id)
+                .and_then(|s| s.ui.get(daemon::META_SESSION_ID)?.parse::<u64>().ok());
+            ctx.emit(SwarmSessionsEvent::Program { daemon_id, warp_session_id, title, body });
+        }
+        if changed {
+            ctx.emit(SwarmSessionsEvent::Changed);
+        }
+    }
+
+    /// What's worth telling the user about a status change: the program now
+    /// needs them, finished or failed, or asked for a notification.
+    fn program_news(
+        &self,
+        host: Option<&str>,
+        id: &str,
+        old: Option<&daemon::ProgramStatus>,
+        new: &daemon::ProgramStatus,
+    ) -> Vec<(String, String, String)> {
+        let name = self
+            .sessions_on(host)
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| s.name.clone().filter(|n| !n.is_empty()).unwrap_or_else(|| s.display_name().to_string()))
+            .unwrap_or_else(|| "A session".to_string());
+        let name = match host {
+            Some(h) => format!("{name} on {h}"),
+            None => name,
+        };
+        let mut news = Vec::new();
+        let headline = |st: Option<&daemon::ProgramStatus>| {
+            st.and_then(|st| st.headline()).map(|r| (r.id.clone(), r.state, r.kind, r.msg.clone()))
+        };
+        if headline(old) != headline(Some(new))
+            && let Some(r) = new.headline()
+        {
+            let app = new.app_of(r).map(app_name);
+            let what = match r.state {
+                daemon::StatusState::Blocked => Some(format!("{name} needs you")),
+                daemon::StatusState::Done => Some(format!("{name} finished")),
+                daemon::StatusState::Error => Some(format!("{name} failed")),
+                _ => None,
+            };
+            if let Some(title) = what {
+                let body = r.msg.clone().or_else(|| r.title.clone()).unwrap_or_else(|| match (r.state, r.kind) {
+                    (daemon::StatusState::Blocked, Some(daemon::BlockedKind::Permission)) => "Waiting for your approval".into(),
+                    (daemon::StatusState::Blocked, Some(daemon::BlockedKind::Question)) => "Waiting for your answer".into(),
+                    (daemon::StatusState::Blocked, Some(daemon::BlockedKind::Auth)) => "Waiting for you to sign in".into(),
+                    (daemon::StatusState::Blocked, None) => "Waiting for you".into(),
+                    _ => app.clone().unwrap_or_default(),
+                });
+                news.push((id.to_string(), title, body));
+            }
+        }
+        if let Some(n) = new.notification.as_ref().filter(|n| old.and_then(|o| o.notification.as_ref()).map(|o| o.at_ms) != Some(n.at_ms)) {
+            let title = if n.title.is_empty() { name.clone() } else { format!("{} · {name}", n.title) };
+            news.push((id.to_string(), title, n.body.clone()));
+        }
+        news
+    }
+
+    /// The user is looking at daemon session `id`: its finished and failed
+    /// reports, and its last notification, have been seen.
+    pub fn mark_program_seen(&self, id: &str) {
+        let Some(((host, _), status)) = self.statuses.iter().find(|((_, sid), _)| sid == id) else { return };
+        let seen = status.notification.is_some()
+            || status.records.iter().any(|r| matches!(r.state, daemon::StatusState::Done | daemon::StatusState::Error));
+        if seen {
+            daemon::clear_status(host.clone(), id.to_string());
+        }
     }
 
     fn on_sessions(&mut self, (host, sessions): (Host, Vec<DaemonSession>), ctx: &mut ModelContext<Self>) {
@@ -317,20 +450,32 @@ impl SwarmSessions {
             .unwrap_or_else(|| "A session".to_string())
     }
 
-    /// How many things need the user's attention (the Dock badge).
+    /// How many things need the user's attention (the Dock badge): failures,
+    /// lost connections, and programs waiting for the user.
     pub fn attention_count(&self) -> usize {
-        self.attention.len()
+        self.attention.len() + self.blocked().count()
+    }
+
+    /// Sessions whose program waits for the user, with what it says.
+    fn blocked(&self) -> impl Iterator<Item = (&Host, &String, &daemon::StatusRecord)> {
+        self.statuses.iter().filter_map(|((host, id), st)| {
+            let r = st.headline().filter(|r| r.state == daemon::StatusState::Blocked)?;
+            (!self.attention.contains_key(&(host.clone(), id.clone()))).then_some((host, id, r))
+        })
     }
 
     /// What needs the user's attention, as the Dock menu lists it: the
     /// session's tab, and what happened to it.
     pub fn needing_attention(&self) -> Vec<(super::ReattachTab, String)> {
+        let blocked = self.blocked().map(|(host, id, r)| ((host, id), record_text(r)));
         self.attention
             .iter()
-            .filter_map(|((host, id), body)| {
+            .map(|(key, body)| ((&key.0, &key.1), body.trim_end_matches('.').to_string()))
+            .chain(blocked)
+            .filter_map(|((host, id), what)| {
                 let session = self.sessions_on(host.as_deref()).iter().find(|s| &s.id == id)?;
                 let tab = super::ReattachTab::for_session(host.as_deref(), session);
-                Some((tab, body.trim_end_matches('.').to_string()))
+                Some((tab, what))
             })
             .collect()
     }
@@ -350,10 +495,19 @@ impl SwarmSessions {
             Some((host, s))
         })?;
         let needs_attention = self.attention.contains_key(&(host.clone(), session.id.clone()));
+        let program = self.statuses.get(&(host.clone(), session.id.clone()));
+        let headline = program.and_then(|st| st.headline()).filter(|r| r.state != daemon::StatusState::Idle);
         let mark = if daemon::is_reconnecting(&session.id) {
             SessionMark::Reconnecting
         } else if needs_attention {
             SessionMark::Attention
+        } else if let Some(r) = headline {
+            match r.state {
+                daemon::StatusState::Blocked => SessionMark::Blocked,
+                daemon::StatusState::Error => SessionMark::Attention,
+                daemon::StatusState::Done => SessionMark::Done,
+                _ => SessionMark::Busy,
+            }
         } else if !session.is_running() {
             SessionMark::Exited
         } else if session.foreground.is_some() {
@@ -388,6 +542,7 @@ impl SwarmSessions {
             name: session.name.clone(),
             last_activity_ms: last_activity_ms(session),
             ended: ended_label(session),
+            program: headline.map(record_text),
         })
     }
 
@@ -457,6 +612,38 @@ fn last_activity_ms(session: &DaemonSession) -> u64 {
     session.last_output_ms.max(session.last_input_ms).max(ended).max(session.created_ms)
 }
 
+/// A status record in a few words: "Needs you: Run npm install?",
+/// "Working 40%", "Done: 12 packages".
+fn record_text(r: &daemon::StatusRecord) -> String {
+    let mut text = match r.state {
+        daemon::StatusState::Blocked => "Needs you".to_string(),
+        daemon::StatusState::Working => "Working".to_string(),
+        daemon::StatusState::Done => "Done".to_string(),
+        daemon::StatusState::Error => "Failed".to_string(),
+        daemon::StatusState::Idle => "Idle".to_string(),
+    };
+    if let Some(p) = r.progress {
+        text.push_str(&format!(" {p}%"));
+    }
+    if let Some(m) = r.msg.as_deref().or(r.title.as_deref()).filter(|m| !m.is_empty()) {
+        text.push_str(": ");
+        text.push_str(m);
+    }
+    text
+}
+
+/// A program's app id as people say it: `claude-code` → "Claude Code".
+fn app_name(app: &str) -> String {
+    app.split(['-', '_'])
+        .filter(|w| !w.is_empty())
+        .map(|w| {
+            let mut c = w.chars();
+            c.next().map(|f| f.to_uppercase().chain(c).collect::<String>()).unwrap_or_default()
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// How `session` ended, in a few words; `None` while it runs.
 fn ended_label(session: &DaemonSession) -> Option<String> {
     match session.state {
@@ -498,7 +685,33 @@ mod tests {
             name: name.map(str::to_string),
             last_activity_ms: 0,
             ended: None,
+            program: None,
         }
+    }
+
+    #[test]
+    fn program_status_wins_the_detail_line() {
+        let mut s = status(None, Some("~/src/app"));
+        s.command = Some("claude".to_string());
+        s.program = Some("Needs you: Run npm install?".to_string());
+        assert_eq!(s.detail(None), "Needs you: Run npm install?");
+    }
+
+    #[test]
+    fn records_and_app_names_in_words() {
+        use warp_terminal::local_tty::daemon::{StatusRecord, StatusState};
+        let r = StatusRecord {
+            id: String::new(),
+            state: StatusState::Working,
+            kind: None,
+            progress: Some(40),
+            app: None,
+            title: None,
+            msg: Some("Building".to_string()),
+            updated_ms: 0,
+        };
+        assert_eq!(super::record_text(&r), "Working 40%: Building");
+        assert_eq!(super::app_name("claude-code"), "Claude Code");
     }
 
     #[test]
