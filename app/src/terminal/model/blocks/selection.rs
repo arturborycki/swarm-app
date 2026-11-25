@@ -1589,6 +1589,113 @@ fn read_selected_text_from_pending_user_query_block(
     pending_user_query_block_view.selected_text(app)
 }
 
+/// swarm-term: copy mode works on grid points, so its selection keeps its type (lines) as the
+/// cursor moves.
+impl BlockList {
+    /// The selection's head and tail (copy mode's anchor and cursor) as grid points.
+    pub fn swarm_selection_ends(&self) -> Option<(WithinBlock<Point>, WithinBlock<Point>)> {
+        let mut selection = self.selection.clone()?;
+        let head_is_below_tail = (selection.head.point.row > selection.tail.point.row && !self.is_inverted)
+            || (selection.head.point.row < selection.tail.point.row && self.is_inverted);
+        let (upper, lower) = selection.clamp_to_grid_points(self)?;
+        Some(if head_is_below_tail { (lower, upper) } else { (upper, lower) })
+    }
+
+    fn swarm_anchor(&self, point: &WithinBlock<Point>) -> BlockListPoint {
+        let mut anchor = BlockListPoint::from_within_block_point(point, self);
+        // Endpoints are positioned in the row's vertical center (see standardize_text_selection).
+        anchor.row += 0.5.into_lines();
+        anchor
+    }
+
+    /// Selects from `anchor` to `cursor` (whole lines with `lines`), or just the cell at
+    /// `cursor`. Returns the cursor's position in the block list.
+    pub fn swarm_set_copy_selection(
+        &mut self,
+        anchor: Option<WithinBlock<Point>>,
+        cursor: WithinBlock<Point>,
+        lines: bool,
+    ) -> BlockListPoint {
+        let to = self.swarm_anchor(&cursor);
+        match anchor {
+            None => {
+                self.start_selection(to, SelectionType::Simple, Side::Left);
+                self.update_selection(to, Side::Right);
+            }
+            Some(anchor) => {
+                let from = self.swarm_anchor(&anchor);
+                let forward = (from.row, from.column) <= (to.row, to.column);
+                let selection_type = if lines { SelectionType::Lines } else { SelectionType::Simple };
+                self.start_selection(from, selection_type, if forward { Side::Left } else { Side::Right });
+                self.update_selection(to, if forward { Side::Right } else { Side::Left });
+            }
+        }
+        to
+    }
+
+    /// The characters of `point`'s row as displayed, one per column.
+    pub fn swarm_row_chars(&self, point: &WithinBlock<Point>) -> Option<Vec<char>> {
+        use crate::terminal::model::grid::Dimensions as _;
+        let grid = self.grid_handler_within_block(point).ok()?;
+        let row = point.get().row;
+        let columns = grid.columns();
+        if columns == 0 {
+            return None;
+        }
+        let text = grid.bounds_to_string(
+            Point::new(row, 0),
+            Point::new(row, columns - 1),
+            false,
+            crate::terminal::model::secrets::RespectObfuscatedSecrets::Yes,
+            false,
+            crate::terminal::model::grid::RespectDisplayedOutput::Yes,
+        );
+        let mut chars: Vec<char> = text.chars().filter(|c| *c != '\n').collect();
+        chars.resize(columns, ' ');
+        Some(chars)
+    }
+
+    /// The point one row below (`down`) or above `point` at `column`, moving into the next grid
+    /// at a grid's edge; `None` at the top or bottom of the block list.
+    pub fn swarm_step_row(
+        &mut self,
+        point: &WithinBlock<Point>,
+        down: bool,
+        column: usize,
+        inverted_blocklist: bool,
+    ) -> Option<WithinBlock<Point>> {
+        let row = point.get().row;
+        let rows = self.block_at(point.block_index)?.grid_of_type(point.grid)?.len_displayed();
+        let within = |row| Some(WithinBlock::new(Point::new(row, column), point.block_index, point.grid));
+        match down {
+            true if row + 1 < rows => within(row + 1),
+            false if row > 0 => within(row - 1),
+            true => self.seek_down_to_next_grid(point.block_index, point.grid, column, inverted_blocklist),
+            false => self.seek_up_to_next_grid(point.block_index, point.grid, column, inverted_blocklist),
+        }
+    }
+
+    /// The first row of the topmost (`top`) or last row of the bottom block with output, or a
+    /// command.
+    pub fn swarm_edge_row(&self, top: bool) -> Option<WithinBlock<Point>> {
+        let count = self.blocks().len();
+        let mut order: Box<dyn Iterator<Item = usize>> = if top { Box::new(0..count) } else { Box::new((0..count).rev()) };
+        order.find_map(|i| {
+            let index = BlockIndex(i);
+            let block = self.block_at(index)?;
+            [GridType::Output, GridType::PromptAndCommand].into_iter().find_map(|grid_type| {
+                let rows = block.grid_of_type(grid_type)?.len_displayed();
+                (rows > 0).then(|| WithinBlock::new(Point::new(if top { 0 } else { rows - 1 }, 0), index, grid_type))
+            })
+        })
+    }
+
+    /// How many rows the block list shows at once.
+    pub fn swarm_visible_rows(&self) -> usize {
+        self.size.rows
+    }
+}
+
 #[cfg(test)]
 #[path = "selection_tests.rs"]
 mod tests;

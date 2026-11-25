@@ -170,6 +170,8 @@ pub enum WorkspaceAction {
     SwarmCheckForUpdates,
     /// swarm-term: copy the app's, daemons' and updater's state for a bug report.
     SwarmCopyDebugInfo,
+    /// swarm-term: have Claude Code and Codex report their state, here and on connected hosts.
+    SwarmSetUpAgents,
     /// swarm-term: mute the active tab's sessions (no notifications, no Dock
     /// badge), or unmute them if they all are.
     SwarmToggleMute,
@@ -187,6 +189,16 @@ pub enum WorkspaceAction {
     SwarmBalanceSplits,
     /// swarm-term: move the focused pane to a new tab after this one.
     SwarmMovePaneToNewTab,
+    /// swarm-term: open Go to Anything on the tabs the focused pane can move to.
+    SwarmChooseTabForPane,
+    /// swarm-term: move the focused pane into the tab with this pane group, beside its panes.
+    SwarmMovePaneToTab(EntityId),
+    /// swarm-term: move the focused pane to a window of its own.
+    SwarmMovePaneToNewWindow,
+    /// swarm-term: move the active tab to a window of its own.
+    SwarmMoveTabToNewWindow,
+    /// swarm-term: turn an iTerm2 or Ghostty theme file into a theme and use it.
+    SwarmImportTheme,
     /// swarm-term: the sidebar lists only sessions with something to report,
     /// or every session again.
     SwarmToggleActivity,
@@ -1208,6 +1220,7 @@ impl WorkspaceAction {
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
             | SwarmCopyDebugInfo
+            | SwarmSetUpAgents
             | SwarmToggleMute
             | SwarmMarkUnread
             | SwarmNavigateBack
@@ -1216,6 +1229,11 @@ impl WorkspaceAction {
             | SwarmCloseOtherPanes
             | SwarmBalanceSplits
             | SwarmMovePaneToNewTab
+            | SwarmChooseTabForPane
+            | SwarmMovePaneToTab(_)
+            | SwarmMovePaneToNewWindow
+            | SwarmMoveTabToNewWindow
+            | SwarmImportTheme
             | SwarmToggleActivity
             | Reauth
             | SignupAnonymousUser

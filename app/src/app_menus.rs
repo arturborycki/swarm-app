@@ -475,6 +475,7 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             |_props, _ctx| MenuItemPropertyChanges::default(),
             Keystroke::parse("alt-cmd-t").ok(),
         )));
+        items.push(swarm_workspace_item("Import Theme…", WorkspaceAction::SwarmImportTheme));
         items.push(swarm_workspace_item_with_key(
             "Show Activity",
             WorkspaceAction::SwarmToggleActivity,
@@ -649,6 +650,9 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
             [
                 swarm_workspace_item("Balance Splits", WorkspaceAction::SwarmBalanceSplits),
                 swarm_workspace_item("Move Pane to New Tab", WorkspaceAction::SwarmMovePaneToNewTab),
+                swarm_workspace_item("Move Pane to Tab…", WorkspaceAction::SwarmChooseTabForPane),
+                swarm_workspace_item("Move Pane to New Window", WorkspaceAction::SwarmMovePaneToNewWindow),
+                swarm_workspace_item("Move Tab to New Window", WorkspaceAction::SwarmMoveTabToNewWindow),
                 swarm_workspace_item("Close Other Panes", WorkspaceAction::SwarmCloseOtherPanes),
             ],
         );
@@ -1335,6 +1339,12 @@ fn make_swarm_app_menu(ctx: &AppContext) -> Menu {
                     ..Default::default()
                 }
             },
+            None,
+        )),
+        MenuItem::Custom(CustomMenuItem::new(
+            "Set Up Coding Agents…",
+            |ctx| ctx.dispatch_global_action("root_view:swarm_show", &Some(WorkspaceAction::SwarmSetUpAgents)),
+            no_updates,
             None,
         )),
         MenuItem::Separator,

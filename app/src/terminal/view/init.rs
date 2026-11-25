@@ -276,20 +276,42 @@ pub fn init(app: &mut AppContext) {
 
     // swarm-term: copy mode's keys, only while it's on.
     {
+        use crate::terminal::view::action::SwarmCopyMotion as M;
         let copy_mode = || id!("Terminal") & !id!("IMEOpen") & id!("SwarmCopyMode");
         let mut bindings = Vec::new();
-        for (keys, direction) in [
-            (["h", "left"], SelectionDirection::Left),
-            (["l", "right"], SelectionDirection::Right),
-            (["k", "up"], SelectionDirection::Up),
-            (["j", "down"], SelectionDirection::Down),
-        ] {
-            for key in keys {
-                bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeMove(direction.clone()), copy_mode()));
+        let motions: &[(&[&str], M)] = &[
+            (&["h", "left"], M::Left),
+            (&["l", "right"], M::Right),
+            (&["k", "up"], M::Up),
+            (&["j", "down"], M::Down),
+            (&["w"], M::WordForward),
+            (&["b"], M::WordBackward),
+            (&["e"], M::WordEnd),
+            (&["^", "shift-^"], M::FirstNonBlank),
+            (&["$", "shift-$"], M::LineEnd),
+            (&["g", "home"], M::Top),
+            (&["shift-G", "end"], M::Bottom),
+            (&["ctrl-u", "pageup"], M::HalfPageUp),
+            (&["ctrl-d", "pagedown"], M::HalfPageDown),
+            (&["n"], M::NextMatch),
+            (&["shift-N"], M::PreviousMatch),
+        ];
+        for (keys, motion) in motions {
+            for key in *keys {
+                bindings.push(FixedBinding::new(*key, TerminalAction::SwarmCopyModeMotion(*motion), copy_mode()));
             }
+        }
+        for digit in 0..=9u8 {
+            let key = digit.to_string();
+            bindings.push(FixedBinding::new(&key, TerminalAction::SwarmCopyModeCount(digit), copy_mode()));
         }
         for key in ["v", "space"] {
             bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeToggleSelect, copy_mode()));
+        }
+        bindings.push(FixedBinding::new("shift-V", TerminalAction::SwarmCopyModeLineSelect, copy_mode()));
+        bindings.push(FixedBinding::new("o", TerminalAction::SwarmCopyModeSwapEnds, copy_mode()));
+        for key in ["/", "?", "shift-?"] {
+            bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeSearch, copy_mode()));
         }
         for key in ["y", "enter", "cmd-c"] {
             bindings.push(FixedBinding::new(key, TerminalAction::SwarmCopyModeYank, copy_mode()));

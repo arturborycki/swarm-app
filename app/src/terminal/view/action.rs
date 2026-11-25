@@ -48,6 +48,27 @@ use crate::terminal::view::passive_suggestions::PromptSuggestionResolution;
 use crate::workflows::workflow::Workflow;
 
 /// Version of the agent onboarding flow (non-legacy).
+/// swarm-term: where a copy mode motion takes the cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SwarmCopyMotion {
+    Left,
+    Right,
+    Up,
+    Down,
+    WordForward,
+    WordBackward,
+    WordEnd,
+    LineStart,
+    FirstNonBlank,
+    LineEnd,
+    Top,
+    Bottom,
+    HalfPageUp,
+    HalfPageDown,
+    NextMatch,
+    PreviousMatch,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AgentOnboardingVersion {
     UniversalInput {
@@ -313,11 +334,18 @@ pub enum TerminalAction {
     SwarmRestartSession,
     /// swarm-term: close the tab of this ended daemon session.
     SwarmCloseEndedSession,
-    /// swarm-term: copy mode: a keyboard cursor in the output, moved with
-    /// hjkl or the arrows; `v` starts a selection, `y` copies it.
+    /// swarm-term: copy mode: a keyboard cursor in the output, moved as in vi;
+    /// `v` starts a selection (`V` whole lines), `y` copies it.
     SwarmCopyModeEnter,
-    SwarmCopyModeMove(SelectionDirection),
+    SwarmCopyModeMotion(SwarmCopyMotion),
     SwarmCopyModeToggleSelect,
+    SwarmCopyModeLineSelect,
+    /// Moves the cursor to the selection's other end (`o`).
+    SwarmCopyModeSwapEnds,
+    /// A digit of the count that repeats the next motion.
+    SwarmCopyModeCount(u8),
+    /// Opens the find bar; `n` and `N` then move the cursor between its matches.
+    SwarmCopyModeSearch,
     SwarmCopyModeYank,
     SwarmCopyModeExit,
     ToggleSnackbarInActivePane,
@@ -653,8 +681,12 @@ impl fmt::Debug for TerminalAction {
             SwarmRestartSession => f.write_str("SwarmRestartSession"),
             SwarmCloseEndedSession => f.write_str("SwarmCloseEndedSession"),
             SwarmCopyModeEnter => f.write_str("SwarmCopyModeEnter"),
-            SwarmCopyModeMove(direction) => write!(f, "SwarmCopyModeMove({direction:?})"),
+            SwarmCopyModeMotion(motion) => write!(f, "SwarmCopyModeMotion({motion:?})"),
             SwarmCopyModeToggleSelect => f.write_str("SwarmCopyModeToggleSelect"),
+            SwarmCopyModeLineSelect => f.write_str("SwarmCopyModeLineSelect"),
+            SwarmCopyModeSwapEnds => f.write_str("SwarmCopyModeSwapEnds"),
+            SwarmCopyModeCount(digit) => write!(f, "SwarmCopyModeCount({digit})"),
+            SwarmCopyModeSearch => f.write_str("SwarmCopyModeSearch"),
             SwarmCopyModeYank => f.write_str("SwarmCopyModeYank"),
             SwarmCopyModeExit => f.write_str("SwarmCopyModeExit"),
             ToggleSnackbarInActivePane => write!(f, "ToggleSnackbarInActivePane"),
