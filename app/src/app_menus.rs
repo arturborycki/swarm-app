@@ -456,6 +456,11 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             WorkspaceAction::ToggleVerticalTabsPanel,
             Some("ctrl-cmd-s"),
         ));
+        items.push(swarm_workspace_item_with_key(
+            "Filter Sessions…",
+            WorkspaceAction::SwarmFocusSessionFilter,
+            Some("alt-cmd-f"),
+        ));
     }
     items.extend(vec![
         updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
@@ -596,6 +601,33 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
         updateable_custom_item_without_checkmark(CustomAction::CloseOtherTabs, ctx),
         updateable_custom_item_without_checkmark(CustomAction::CloseTabsRight, ctx),
     ];
+    let items = if crate::swarm::SWARM_CHROME {
+        let mut items = items;
+        // After "Rename Session…" and its separator.
+        items.splice(
+            1..1,
+            [
+                swarm_workspace_item_with_key("Mark as Unread", WorkspaceAction::SwarmMarkUnread, Some("alt-cmd-u")),
+                swarm_workspace_item("Mute or Unmute Session", WorkspaceAction::SwarmToggleMute),
+                MenuItem::Separator,
+                swarm_workspace_item_with_key("Navigate Back", WorkspaceAction::SwarmNavigateBack, Some("ctrl-cmd-[")),
+                swarm_workspace_item_with_key("Navigate Forward", WorkspaceAction::SwarmNavigateForward, Some("ctrl-cmd-]")),
+            ],
+        );
+        // Pane housekeeping, before closing tabs.
+        let close_at = items.len() - 4;
+        items.splice(
+            close_at..close_at,
+            [
+                swarm_workspace_item("Balance Splits", WorkspaceAction::SwarmBalanceSplits),
+                swarm_workspace_item("Move Pane to New Tab", WorkspaceAction::SwarmMovePaneToNewTab),
+                swarm_workspace_item("Close Other Panes", WorkspaceAction::SwarmCloseOtherPanes),
+            ],
+        );
+        items
+    } else {
+        items
+    };
     Menu::new(if crate::swarm::SWARM_CHROME { "Session" } else { "Tab" }, items)
 }
 

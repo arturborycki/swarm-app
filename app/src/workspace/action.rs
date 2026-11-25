@@ -150,6 +150,23 @@ pub enum WorkspaceAction {
     SwarmRestartSession(u64),
     /// swarm-term: compare this app with the latest published release.
     SwarmCheckForUpdates,
+    /// swarm-term: mute the active tab's sessions (no notifications, no Dock
+    /// badge), or unmute them if they all are.
+    SwarmToggleMute,
+    /// swarm-term: show the active tab as having news until it's opened again.
+    SwarmMarkUnread,
+    /// swarm-term: go back to the tab (and pane) shown before this one.
+    SwarmNavigateBack,
+    /// swarm-term: undo `SwarmNavigateBack`.
+    SwarmNavigateForward,
+    /// swarm-term: show the sessions sidebar and put the cursor in its filter.
+    SwarmFocusSessionFilter,
+    /// swarm-term: close every pane of the active tab but the focused one.
+    SwarmCloseOtherPanes,
+    /// swarm-term: give every split of the active tab equal shares.
+    SwarmBalanceSplits,
+    /// swarm-term: move the focused pane to a new tab after this one.
+    SwarmMovePaneToNewTab,
     ActivateTab(usize),
     ActivatePrevTab,
     ActivateNextTab,
@@ -1159,6 +1176,14 @@ impl WorkspaceAction {
             | SwarmRetryConnections
             | SwarmRestartSession(_)
             | SwarmCheckForUpdates
+            | SwarmToggleMute
+            | SwarmMarkUnread
+            | SwarmNavigateBack
+            | SwarmNavigateForward
+            | SwarmFocusSessionFilter
+            | SwarmCloseOtherPanes
+            | SwarmBalanceSplits
+            | SwarmMovePaneToNewTab
             | Reauth
             | SignupAnonymousUser
             | LogOut

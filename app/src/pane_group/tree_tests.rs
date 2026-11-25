@@ -782,3 +782,23 @@ fn test_hide_multiple_child_agent_panes() {
     assert_eq!(tree.visible_pane_ids(), vec![panes[0], panes[1]]);
     assert!(tree.is_pane_hidden(&panes[2]));
 }
+
+#[test]
+fn balance_gives_every_split_equal_shares() {
+    let panes = [PaneId::dummy_pane_id(), PaneId::dummy_pane_id(), PaneId::dummy_pane_id()];
+    let mut tree = PaneData::new(panes[0]);
+    tree.split(panes[0], panes[1], Direction::Right);
+    tree.split(panes[1], panes[2], Direction::Down);
+    // Uneven shares, as after dragging dividers.
+    let PaneNode::Branch(outer) = &mut tree.root else { panic!("expected a branch") };
+    outer.nodes[0].0 = PaneFlex(3.0);
+    if let PaneNode::Branch(inner) = &mut outer.nodes[1].1 {
+        inner.nodes[1].0 = PaneFlex(0.25);
+    }
+    assert!(tree.balance());
+    let PaneNode::Branch(outer) = &tree.root else { panic!("expected a branch") };
+    assert!(outer.nodes.iter().all(|(flex, _)| flex.0 == DEFAULT_FLEX_VALUE));
+    let PaneNode::Branch(inner) = &outer.nodes[1].1 else { panic!("expected a nested branch") };
+    assert!(inner.nodes.iter().all(|(flex, _)| flex.0 == DEFAULT_FLEX_VALUE));
+    assert!(!tree.balance(), "already balanced");
+}

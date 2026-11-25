@@ -6022,6 +6022,26 @@ impl PaneGroup {
         self.dragged_border = Some(info);
     }
 
+    /// swarm-term: equal shares for every split in this tab.
+    pub fn balance_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        if self.panes.balance() {
+            self.clear_hidden_closed_panes(ctx);
+            ctx.notify();
+            ctx.emit(Event::AppStateChanged);
+        }
+    }
+
+    /// swarm-term: closes every visible pane but the focused one. A session's
+    /// pane closing detaches it: the session keeps running in the daemon.
+    pub fn close_other_panes(&mut self, ctx: &mut ViewContext<Self>) {
+        let keep = self.focused_pane_id(ctx);
+        for pane_id in self.visible_pane_ids() {
+            if pane_id != keep {
+                self.close_pane(pane_id, ctx);
+            }
+        }
+    }
+
     pub fn reset_pane_sizes(&mut self, border_id: EntityId, ctx: &mut ViewContext<Self>) {
         self.dragged_border = None;
         if self.panes.reset_pane_sizes(border_id) {

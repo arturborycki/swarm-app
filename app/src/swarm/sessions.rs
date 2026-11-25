@@ -102,6 +102,8 @@ pub struct SessionStatus {
     /// What its program reports, in a few words ("Needs you: Run npm
     /// install?", "Working 40%"), while it reports something.
     pub program: Option<String>,
+    /// The user muted it: no notifications, not counted in the Dock badge.
+    pub muted: bool,
 }
 
 impl SessionStatus {
@@ -156,6 +158,9 @@ impl SessionStatus {
         }
         if self.elsewhere {
             text.push_str(", also open elsewhere");
+        }
+        if self.muted {
+            text.push_str(", muted");
         }
         text
     }
@@ -242,7 +247,8 @@ impl SwarmSessions {
         for (id, status) in &statuses {
             let key = (host.clone(), id.clone());
             let old = self.statuses.get(&key);
-            if !first && old != Some(status) {
+            let muted = self.sessions_on(host.as_deref()).iter().any(|s| &s.id == id && is_muted(s));
+            if !first && !muted && old != Some(status) {
                 news.extend(self.program_news(host.as_deref(), id, old, status));
             }
         }
@@ -354,7 +360,9 @@ impl SwarmSessions {
                     let body = format!("{name} on {place} {how}.");
                     log::info!("swarm: needs attention: {body}");
                     self.attention.insert((host.clone(), s.id.clone()), body.clone());
-                    news.push(("Session ended".to_string(), body));
+                    if !is_muted(s) {
+                        news.push(("Session ended".to_string(), body));
+                    }
                 }
             }
         }
@@ -453,14 +461,35 @@ impl SwarmSessions {
     /// How many things need the user's attention (the Dock badge): failures,
     /// lost connections, and programs waiting for the user.
     pub fn attention_count(&self) -> usize {
-        self.attention.len() + self.blocked().count()
+        self.attention.keys().filter(|(host, id)| !self.muted(host, id)).count() + self.blocked().count()
+    }
+
+    /// Whether the user muted daemon session `id` on `host`.
+    fn muted(&self, host: &Host, id: &str) -> bool {
+        self.sessions_on(host.as_deref()).iter().any(|s| s.id == id && is_muted(s))
+    }
+
+    /// Whether every daemon session behind these Warp session ids is muted
+    /// (`None` when none of them is a session this app follows).
+    pub fn all_muted(&self, warp_session_ids: &[u64]) -> Option<bool> {
+        let mut found = false;
+        for id in warp_session_ids {
+            if let Some((_, s)) = self.session_for(*id) {
+                found = true;
+                if !is_muted(s) {
+                    return Some(false);
+                }
+            }
+        }
+        found.then_some(true)
     }
 
     /// Sessions whose program waits for the user, with what it says.
     fn blocked(&self) -> impl Iterator<Item = (&Host, &String, &daemon::StatusRecord)> {
         self.statuses.iter().filter_map(|((host, id), st)| {
             let r = st.headline().filter(|r| r.state == daemon::StatusState::Blocked)?;
-            (!self.attention.contains_key(&(host.clone(), id.clone()))).then_some((host, id, r))
+            let counted = !self.attention.contains_key(&(host.clone(), id.clone())) && !self.muted(host, id);
+            counted.then_some((host, id, r))
         })
     }
 
@@ -470,6 +499,7 @@ impl SwarmSessions {
         let blocked = self.blocked().map(|(host, id, r)| ((host, id), record_text(r)));
         self.attention
             .iter()
+            .filter(|((host, id), _)| !self.muted(host, id))
             .map(|(key, body)| ((&key.0, &key.1), body.trim_end_matches('.').to_string()))
             .chain(blocked)
             .filter_map(|((host, id), what)| {
@@ -543,6 +573,7 @@ impl SwarmSessions {
             last_activity_ms: last_activity_ms(session),
             ended: ended_label(session),
             program: headline.map(record_text),
+            muted: is_muted(session),
         })
     }
 
@@ -610,6 +641,11 @@ fn last_activity_ms(session: &DaemonSession) -> u64 {
         _ => 0,
     };
     session.last_output_ms.max(session.last_input_ms).max(ended).max(session.created_ms)
+}
+
+/// Whether the user muted `session` (see [`daemon::META_MUTED`]).
+fn is_muted(session: &DaemonSession) -> bool {
+    session.ui.get(daemon::META_MUTED).is_some_and(|v| v == "1")
 }
 
 /// A status record in a few words: "Needs you: Run npm install?",
@@ -686,6 +722,7 @@ mod tests {
             last_activity_ms: 0,
             ended: None,
             program: None,
+            muted: false,
         }
     }
 

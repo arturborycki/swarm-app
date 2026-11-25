@@ -1112,6 +1112,33 @@ fn summary_overflow_count(total_count: usize, visible_limit: usize) -> usize {
     total_count.saturating_sub(visible_limit)
 }
 
+/// swarm-term: whether a session in `tab` matches the sidebar filter by its
+/// name, host, or state in words ("needs you", "finished", "running claude",
+/// "muted"), besides what Warp matches.
+fn swarm_tab_matches(tab: &TabData, query_lower: &str, app: &AppContext) -> bool {
+    if !crate::swarm::SWARM_CHROME {
+        return false;
+    }
+    #[cfg(unix)]
+    {
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(app);
+        tab.pane_group.as_ref(app).terminal_views(app).iter().any(|view| {
+            let Some(status) = view.as_ref(app).active_block_session_id().and_then(|id| sessions.status_for(id.as_u64()))
+            else {
+                return false;
+            };
+            [status.display_name(), status.spoken(), status.program.clone().unwrap_or_default()]
+                .iter()
+                .any(|text| text.to_lowercase().contains(query_lower))
+        })
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (tab, query_lower, app);
+        false
+    }
+}
+
 fn summary_search_text_fragments(
     summary: &VerticalTabsSummaryData,
     title_override: Option<&str>,
@@ -1201,6 +1228,9 @@ impl VerticalTabsPanelState {
             .filter(|(tab_index, tab)| {
                 // A group-name match admits every member, regardless of its own text.
                 if tab_admitted_by_group_name(tab.group_id, &matched_groups) {
+                    return true;
+                }
+                if swarm_tab_matches(tab, &query_lower, app) {
                     return true;
                 }
                 let pane_group = tab.pane_group.as_ref(app);
@@ -1909,6 +1939,10 @@ fn render_groups(
             .iter()
             .enumerate()
             .filter_map(|(tab_index, tab)| {
+                // Keep in step with `matching_tab_indices`.
+                if swarm_tab_matches(tab, &query_lower, app) {
+                    return Some((tab_index, None));
+                }
                 let pane_group = tab.pane_group.as_ref(app);
                 let visible_pane_ids = pane_group.visible_pane_ids();
                 match resolved_mode {
