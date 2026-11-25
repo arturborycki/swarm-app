@@ -153,6 +153,8 @@ pub enum WorkspaceAction {
     SwarmStopForward { host: String, port: u16 },
     /// swarm-term: choose files and type their paths into the focused session.
     SwarmInsertPath,
+    /// swarm-term: copy mode in the focused session (keyboard selection).
+    SwarmCopyMode,
     /// swarm-term: preview the selected path with Quick Look (or open a
     /// selected link).
     SwarmQuickLook,
@@ -1194,6 +1196,7 @@ impl WorkspaceAction {
             | SwarmForwardPort { .. }
             | SwarmStopForward { .. }
             | SwarmInsertPath
+            | SwarmCopyMode
             | SwarmQuickLook
             | SwarmRetryConnections
             | SwarmRestartSession(_)

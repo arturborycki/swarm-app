@@ -626,6 +626,7 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
                 swarm_workspace_item_with_key("Navigate Back", WorkspaceAction::SwarmNavigateBack, Some("ctrl-cmd-[")),
                 swarm_workspace_item_with_key("Navigate Forward", WorkspaceAction::SwarmNavigateForward, Some("ctrl-cmd-]")),
                 MenuItem::Separator,
+                swarm_workspace_item_with_key("Copy Mode", WorkspaceAction::SwarmCopyMode, Some("shift-cmd-c")),
                 swarm_workspace_item_with_key("Insert Path…", WorkspaceAction::SwarmInsertPath, Some("shift-cmd-i")),
                 swarm_workspace_item_with_key("Quick Look Selection", WorkspaceAction::SwarmQuickLook, Some("shift-cmd-y")),
             ],

@@ -27193,6 +27193,20 @@ impl TypedActionView for Workspace {
                 let _ = (host, port);
             }
             SwarmInsertPath => self.swarm_insert_path(ctx),
+            SwarmCopyMode => {
+                if let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) {
+                    if view.as_ref(ctx).model.lock().is_alt_screen_active() {
+                        self.swarm_alert(
+                            "Copy mode isn't available here".to_string(),
+                            "A full-screen program is showing, and it keeps its own scrollback. Copy mode works on regular command output.".to_string(),
+                            ctx,
+                        );
+                    } else {
+                        view.update(ctx, |view, ctx| view.swarm_copy_mode_enter(ctx));
+                        ctx.focus(&view);
+                    }
+                }
+            }
             SwarmQuickLook => self.swarm_quick_look(ctx),
             SwarmShowSession(warp_session_id) => {
                 let found = self.tabs.iter().enumerate().find_map(|(index, tab)| {

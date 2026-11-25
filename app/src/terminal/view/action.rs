@@ -313,6 +313,13 @@ pub enum TerminalAction {
     SwarmRestartSession,
     /// swarm-term: close the tab of this ended daemon session.
     SwarmCloseEndedSession,
+    /// swarm-term: copy mode: a keyboard cursor in the output, moved with
+    /// hjkl or the arrows; `v` starts a selection, `y` copies it.
+    SwarmCopyModeEnter,
+    SwarmCopyModeMove(SelectionDirection),
+    SwarmCopyModeToggleSelect,
+    SwarmCopyModeYank,
+    SwarmCopyModeExit,
     ToggleSnackbarInActivePane,
     MakeAllParticipantsReaders {
         reason: RoleUpdateReason,
@@ -645,6 +652,11 @@ impl fmt::Debug for TerminalAction {
             VimModeBanner(action) => write!(f, "VimModeBanner({action:?})"),
             SwarmRestartSession => f.write_str("SwarmRestartSession"),
             SwarmCloseEndedSession => f.write_str("SwarmCloseEndedSession"),
+            SwarmCopyModeEnter => f.write_str("SwarmCopyModeEnter"),
+            SwarmCopyModeMove(direction) => write!(f, "SwarmCopyModeMove({direction:?})"),
+            SwarmCopyModeToggleSelect => f.write_str("SwarmCopyModeToggleSelect"),
+            SwarmCopyModeYank => f.write_str("SwarmCopyModeYank"),
+            SwarmCopyModeExit => f.write_str("SwarmCopyModeExit"),
             ToggleSnackbarInActivePane => write!(f, "ToggleSnackbarInActivePane"),
             MakeAllParticipantsReaders { reason } => {
                 write!(f, "MakeAllParticipantsReaders {{ reason: {reason:?} }}")
