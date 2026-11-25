@@ -6919,6 +6919,22 @@ impl Workspace {
         );
     }
 
+    /// Opens Go to Anything on "rename pane to " for the focused pane's session.
+    fn swarm_choose_pane_name(&mut self, ctx: &mut ViewContext<Self>) {
+        let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
+        let Some(id) = view.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) else { return };
+        #[cfg(unix)]
+        let current = crate::swarm::sessions::SwarmSessions::as_ref(ctx)
+            .session_for(id)
+            .map(|(_, session)| session.display_name().to_string())
+            .unwrap_or_default();
+        #[cfg(not(unix))]
+        let current = String::new();
+        *crate::swarm::PANE_RENAME_TARGET.lock().unwrap_or_else(|e| e.into_inner()) = Some((id, current));
+        self.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+        self.palette.update(ctx, |palette, ctx| palette.insert_query_text("rename pane to ", ctx));
+    }
+
     /// Lists the other tabs in Go to Anything as "Move pane to …" rows.
     fn swarm_choose_tab_for_pane(&mut self, ctx: &mut ViewContext<Self>) {
         self.swarm_set_pane_move_targets(ctx);
@@ -27562,6 +27578,13 @@ impl TypedActionView for Workspace {
                 self.swarm_move_tab_to_new_window(ctx);
             }
             SwarmImportTheme => self.swarm_import_theme(ctx),
+            SwarmChoosePaneName => self.swarm_choose_pane_name(ctx),
+            #[cfg(unix)]
+            SwarmRenamePane { warp_session_id, name } => {
+                warp_terminal::local_tty::daemon::name_sessions(vec![*warp_session_id], name.clone());
+            }
+            #[cfg(not(unix))]
+            SwarmRenamePane { .. } => {}
             SwarmToggleActivity => {
                 let sidebar_shown = *TabSettings::as_ref(ctx).use_vertical_tabs && self.vertical_tabs_panel_open;
                 if !sidebar_shown {

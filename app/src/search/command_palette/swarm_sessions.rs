@@ -53,6 +53,19 @@ impl SyncDataSource for DataSource {
             let sessions = SwarmSessions::as_ref(app);
             let mut hosts: Vec<Option<String>> = vec![None];
             hosts.extend(daemon::known_hosts().into_iter().map(Some));
+            // "rename pane to <name>": names the focused pane's session.
+            if let Some(name) = term.strip_prefix("rename pane to").or_else(|| term.strip_prefix("Rename pane to")) {
+                let target = crate::swarm::PANE_RENAME_TARGET.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some((warp_session_id, current)) = target {
+                    let name = name.trim();
+                    let (label, new) = if name.is_empty() {
+                        ("Clear the pane's name".to_string(), None)
+                    } else {
+                        (format!("Rename pane to {name}"), Some(name.to_string()))
+                    };
+                    items.push((label, format!("now {current}"), WorkspaceAction::SwarmRenamePane { warp_session_id, name: new }));
+                }
+            }
             // "move pane …": the tabs the focused pane can move into.
             if term.to_lowercase().starts_with("move") {
                 let targets = crate::swarm::PANE_MOVE_TARGETS.lock().unwrap_or_else(|e| e.into_inner()).clone();

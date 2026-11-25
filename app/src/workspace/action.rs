@@ -197,6 +197,10 @@ pub enum WorkspaceAction {
     SwarmMovePaneToNewWindow,
     /// swarm-term: move the active tab to a window of its own.
     SwarmMoveTabToNewWindow,
+    /// swarm-term: open Go to Anything to type a name for the focused pane's session.
+    SwarmChoosePaneName,
+    /// swarm-term: name (or, with `None`, un-name) one daemon session, by Warp session id.
+    SwarmRenamePane { warp_session_id: u64, name: Option<String> },
     /// swarm-term: turn an iTerm2 or Ghostty theme file into a theme and use it.
     SwarmImportTheme,
     /// swarm-term: the sidebar lists only sessions with something to report,
@@ -1233,6 +1237,8 @@ impl WorkspaceAction {
             | SwarmMovePaneToTab(_)
             | SwarmMovePaneToNewWindow
             | SwarmMoveTabToNewWindow
+            | SwarmChoosePaneName
+            | SwarmRenamePane { .. }
             | SwarmImportTheme
             | SwarmToggleActivity
             | Reauth
