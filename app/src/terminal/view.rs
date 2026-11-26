@@ -28703,6 +28703,14 @@ impl TypedActionView for TerminalView {
             SwarmSendPrefix(byte) => {
                 if self.is_long_running() {
                     self.write_to_pty(vec![*byte], ctx);
+                } else {
+                    // At the prompt, what the key does in the input: Ctrl-A to the line's start,
+                    // Ctrl-B back a character.
+                    let editor = self.input.as_ref(ctx).editor().clone();
+                    editor.update(ctx, |editor, ctx| match byte {
+                        0x01 => editor.move_to_line_start(ctx),
+                        _ => editor.move_left(false, ctx),
+                    });
                 }
             }
             SwarmResizeModeEnter => self.swarm_resize_mode(true, ctx),
