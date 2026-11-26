@@ -1693,6 +1693,78 @@ fn test_dispatch_keystroke() -> Result<()> {
 }
 
 #[test]
+fn test_priority_bindings_win_over_inner_views() -> Result<()> {
+    struct View {
+        keymap_context: keymap::Context,
+        handled: Vec<String>,
+    }
+
+    impl Entity for View {
+        type Event = ();
+    }
+
+    impl super::View for View {
+        fn render(&self, _: &AppContext) -> Box<dyn Element> {
+            Empty::new().finish()
+        }
+
+        fn ui_name() -> &'static str {
+            "View"
+        }
+
+        fn keymap_context(&self, _: &AppContext) -> keymap::Context {
+            self.keymap_context.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    struct Action(String);
+
+    impl TypedActionView for View {
+        type Action = Action;
+
+        fn handle_action(&mut self, action: &Action, _: &mut ViewContext<Self>) {
+            self.handled.push(action.0.clone());
+        }
+    }
+
+    fn view(context: &'static str) -> View {
+        let mut view = View { keymap_context: Default::default(), handled: Vec::new() };
+        view.keymap_context.set.insert(context);
+        view
+    }
+
+    App::test((), |mut app| async move {
+        let (window_id, outer) = app.add_window(WindowStyle::NotStealFocus, |_| view("outer"));
+        let inner = app.add_typed_action_view(window_id, |_| view("inner"));
+        let chain = [outer.id(), inner.id()];
+        app.update(|ctx| {
+            ctx.register_fixed_bindings(vec![
+                keymap::FixedBinding::new("ctrl-b", Action("inner ctrl-b".into()), id!("inner")),
+                keymap::FixedBinding::new("x", Action("inner x".into()), id!("inner")),
+            ]);
+            ctx.register_priority_bindings(vec![keymap::FixedBinding::new(
+                "ctrl-b c",
+                Action("outer ctrl-b c".into()),
+                id!("outer"),
+            )]);
+        });
+
+        // The sequence's first key is held, not given to the inner view.
+        assert!(app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("ctrl-b")?, false)?);
+        assert!(app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("c")?, false)?);
+        assert_eq!(outer.read(&app, |v, _| v.handled.clone()), ["outer ctrl-b c"]);
+        assert!(inner.read(&app, |v, _| v.handled.is_empty()));
+
+        // A key that doesn't continue the sequence goes on as usual.
+        app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("ctrl-b")?, false)?;
+        app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("x")?, false)?;
+        assert_eq!(inner.read(&app, |v, _| v.handled.clone()), ["inner x"]);
+        Ok(())
+    })
+}
+
+#[test]
 fn test_dispatch_keystroke_typed_action() -> Result<()> {
     struct View {
         id: usize,

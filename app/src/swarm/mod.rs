@@ -8,8 +8,6 @@
 #[cfg(unix)]
 pub mod connect;
 
-/// Tabs the focused pane can move to, as (pane group, title), for Go to Anything's
-/// "Move pane to …" rows. Set when the palette opens.
 /// The focused pane's session (its Warp session id and name) for Go to Anything's "Rename pane
 /// to …" row. Set when Rename Pane… opens the palette.
 pub static PANE_RENAME_TARGET: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
@@ -18,7 +16,18 @@ pub static PANE_RENAME_TARGET: std::sync::Mutex<Option<(u64, String)>> = std::sy
 /// Set when Go to Directory… opens the palette.
 pub static CD_TARGET: std::sync::Mutex<Option<(u64, Option<String>)>> = std::sync::Mutex::new(None);
 
+/// Tabs the focused pane can move to, as (pane group, title), for Go to Anything's
+/// "Move pane to …" rows. Set when the palette opens.
 pub static PANE_MOVE_TARGETS: std::sync::Mutex<Vec<(warpui::EntityId, String)>> = std::sync::Mutex::new(Vec::new());
+/// The last Find in All Sessions: the text and, per session (its host, `None` for this Mac),
+/// the matching lines, for Go to Anything's "find …" rows.
+#[cfg(unix)]
+pub static FIND_RESULTS: std::sync::Mutex<Option<(String, Vec<FoundIn>)>> = std::sync::Mutex::new(None);
+
+/// A session's matching lines and its host (`None`: this Mac).
+#[cfg(unix)]
+pub type FoundIn = (Option<String>, warp_terminal::local_tty::daemon::SessionHits);
+
 pub mod copy_motion;
 pub mod theme_import;
 #[cfg(unix)]

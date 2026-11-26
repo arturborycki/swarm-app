@@ -354,7 +354,7 @@ async fn watch_once(
     }
 }
 
-pub use swarm_client::swarm_proto::{BlockedKind, ProgramStatus, StatusRecord, StatusState};
+pub use swarm_client::swarm_proto::{BlockedKind, ProgramStatus, SearchHit, SessionHits, StatusRecord, StatusState};
 
 /// Calls `on_change` with what the programs in `host`'s sessions report about
 /// themselves (OSC 7501 status, notifications, bells), now and after every
@@ -1203,6 +1203,35 @@ pub async fn refresh_ports(daemons: &'static Daemons, hosts: Vec<Option<String>>
         }
     }
     changed
+}
+
+/// Lines with `text` in the output of sessions on each of `hosts` (`None`:
+/// this Mac), searched by each host's daemon. A host whose daemon is from
+/// another build is left out: an older one would drop the connection.
+pub async fn search_sessions(
+    daemons: &'static Daemons,
+    hosts: Vec<Option<String>>,
+    text: String,
+) -> Vec<(Option<String>, swarm_client::swarm_proto::SessionHits)> {
+    let asks = hosts.into_iter().map(|host| {
+        let opts = swarm_client::swarm_proto::SearchOpts { text: text.clone(), case_sensitive: None, max_hits: 30 };
+        async move {
+            let found = async {
+                let client = daemons.client(host.as_deref()).await?;
+                if client.daemon().version != VERSION {
+                    return Ok(Vec::new());
+                }
+                tokio::time::timeout(Duration::from_secs(30), client.search(opts)).await?
+            }
+            .await
+            .unwrap_or_else(|e: anyhow::Error| {
+                log::debug!("swarm: search on {}: {e:#}", host.as_deref().unwrap_or("this Mac"));
+                Vec::new()
+            });
+            found.into_iter().map(move |f| (host.clone(), f)).collect::<Vec<_>>()
+        }
+    });
+    futures::future::join_all(asks).await.into_iter().flatten().collect()
 }
 
 /// Ports found by the last [`refresh_ports`]: (host, daemon session id, port).

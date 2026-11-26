@@ -167,6 +167,8 @@ pub enum KeybindingsViewAction {
     CancelKeyStrokeEditing(usize),
     ConfirmKeyStroke(usize),
     RemoveKeyStroke(usize),
+    /// swarm-term: the tmux-style prefix key ("off", "ctrl-b" or "ctrl-a").
+    SwarmSetPrefix(&'static str),
 }
 
 #[derive(Default, Clone)]
@@ -842,6 +844,16 @@ impl TypedActionView for KeybindingsView {
 
         match action {
             RemoveKeyStroke(index) => self.remove_keystroke(*index, ctx),
+            SwarmSetPrefix(prefix) => {
+                use settings::Setting as _;
+                let prefix = prefix.to_string();
+                crate::settings::swarm_keys::SwarmKeySettings::handle(ctx).update(ctx, |settings, ctx| {
+                    if let Err(e) = settings.prefix.set_value(prefix, ctx) {
+                        log::warn!("swarm: couldn't save the prefix key: {e:#}");
+                    }
+                });
+                ctx.notify();
+            }
             ResetToDefaultKeyStroke(index) => self.reset_to_default_keystroke(*index, ctx),
             CancelKeyStrokeEditing(index) => self.cancel_keystroke_editing(*index, ctx),
             ConfirmKeyStroke(index) => self.confirm_keystroke_editing(*index, ctx),
@@ -961,9 +973,70 @@ fn trigger_keybinding_notifier(
 #[derive(Default)]
 struct KeybindingsWidget {
     local_only_icon_mouse_state: MouseStateHandle,
+    /// swarm-term: the prefix key choices' buttons.
+    swarm_prefix_mouse_states: [MouseStateHandle; 3],
 }
 
 impl KeybindingsWidget {
+    /// swarm-term: "tmux-style prefix keys: Off · Ctrl-B · Ctrl-A", and what they do.
+    fn render_swarm_prefix(&self, appearance: &Appearance, app: &AppContext) -> Box<dyn Element> {
+        use crate::settings::swarm_keys::{PREFIXES, SwarmKeySettings};
+        use warpui::platform::Cursor;
+        use warpui::ui_components::button::ButtonVariant;
+
+        let theme = appearance.theme();
+        let font_size = appearance.ui_font_size() + FONT_DELTA;
+        let current = SwarmKeySettings::as_ref(app).prefix.clone();
+        let mut row = Flex::row().with_spacing(8.).with_cross_axis_alignment(CrossAxisAlignment::Center).with_child(
+            Container::new(render_text("tmux-style prefix keys", Some(UiComponentStyles {
+                font_size: Some(font_size),
+                ..Default::default()
+            }), appearance))
+            .with_padding_right(8.)
+            .finish(),
+        );
+        for ((value, label), mouse) in PREFIXES.into_iter().zip(self.swarm_prefix_mouse_states.iter()) {
+            let variant = if current == value { ButtonVariant::Accent } else { ButtonVariant::Secondary };
+            let button = appearance
+                .ui_builder()
+                .button(variant, mouse.clone())
+                .with_style(UiComponentStyles { font_size: Some(12.), ..Default::default() })
+                .with_text_label(label.to_string())
+                .build()
+                .with_cursor(Cursor::PointingHand)
+                .on_click(move |ctx, _, _| ctx.dispatch_typed_action(KeybindingsViewAction::SwarmSetPrefix(value)))
+                .finish();
+            row.add_child(button);
+        }
+        let prefix = PREFIXES.iter().find(|(value, _)| *value == current && *value != "off").map(|(_, label)| *label);
+        let help = match prefix {
+            Some(p) => format!(
+                "{p}, then: c new tab · % split right · \" split down · arrows move between panes · o next pane · \
+                 z zoom · x close pane · n/p next/previous tab · 1-9 tab · , rename pane · [ copy mode · \
+                 w Go to Anything · r resize mode · {p} again sends {p} to the program."
+            ),
+            None => "Use Ctrl-B (as in tmux) or Ctrl-A (as in screen), then a key, to split, move between and \
+                     resize panes. Off: those keys go to the shell as usual."
+                .to_string(),
+        };
+        Container::new(
+            Flex::column()
+                .with_child(row.finish())
+                .with_child(
+                    Container::new(render_text(&help, Some(UiComponentStyles {
+                        font_size: Some(font_size - 1.),
+                        font_color: Some(theme.sub_text_color(theme.background()).into_solid()),
+                        ..Default::default()
+                    }), appearance))
+                    .with_padding_top(6.)
+                    .finish(),
+                )
+                .finish(),
+        )
+        .with_padding_top(16.)
+        .finish()
+    }
+
     fn render_description(
         &self,
         bindings: Option<&Vec<CommandBinding>>,
@@ -1122,6 +1195,7 @@ impl SettingsWidget for KeybindingsWidget {
         Flex::column()
             .with_child(subheader)
             .with_child(description)
+            .with_child(self.render_swarm_prefix(appearance, app))
             .with_child(render_columns(
                 Container::new(render_text(
                     "Command",

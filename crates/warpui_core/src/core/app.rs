@@ -634,6 +634,10 @@ pub struct AppContext {
     rendering_config: rendering::Config,
     global_actions: HashMap<String, Vec<Box<GlobalActionCallback>>>,
     keystroke_matcher: Matcher,
+    /// Bindings tried before `keystroke_matcher`'s, on every view in the responder chain, so
+    /// they win over a focused child's own bindings (swarm-term's prefix keys over the input
+    /// editor's).
+    priority_matcher: Matcher,
     next_task_id: usize,
     weak_self: rc::Weak<RefCell<Self>>,
     pub(super) subscriptions: EntityIdMap<Vec<Subscription>>,
@@ -807,6 +811,7 @@ impl AppContext {
             presenters: Default::default(),
             rendering_config: Default::default(),
             keystroke_matcher: Default::default(),
+            priority_matcher: Default::default(),
             disabled_key_bindings_windows: Default::default(),
             next_task_id: 0,
             weak_self: rc::Weak::default(),
@@ -1810,6 +1815,12 @@ impl AppContext {
         self.keystroke_matcher.register_fixed_bindings(bindings);
     }
 
+    /// Registers bindings that are matched before all others: a view's priority binding wins
+    /// over the bindings of the views inside it, such as a text field it holds.
+    pub fn register_priority_bindings<T: IntoIterator<Item = FixedBinding>>(&mut self, bindings: T) {
+        self.priority_matcher.register_fixed_bindings(bindings);
+    }
+
     /// Register new actions with the app
     ///
     /// Editable Bindings have a name identifier which can be used to override their key bindings
@@ -2196,11 +2207,25 @@ impl AppContext {
         is_composing: bool,
     ) -> Result<bool> {
         let mut context_chain = self.contexts_from_responder_chain(window_id, responder_chain)?;
-        let mut pending = false;
-        for (i, ctx) in context_chain.iter_mut().enumerate().rev() {
-            if is_composing {
+        if is_composing {
+            for ctx in context_chain.iter_mut() {
                 ctx.set.insert("IMEOpen");
             }
+        }
+        for (i, ctx) in context_chain.iter().enumerate().rev() {
+            match self.priority_matcher.push_keystroke(keystroke.clone(), responder_chain[i], ctx) {
+                MatchResult::None => {}
+                // The start of a key sequence: held until the next key decides it.
+                MatchResult::Pending => return Ok(true),
+                MatchResult::Action(action) => {
+                    if self.dispatch_typed_action(window_id, &responder_chain[0..=i], action.as_ref(), log::Level::Info) {
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        let mut pending = false;
+        for (i, ctx) in context_chain.iter_mut().enumerate().rev() {
             let handled = match self.keystroke_matcher.push_keystroke(
                 keystroke.clone(),
                 responder_chain[i],

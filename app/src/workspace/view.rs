@@ -6963,6 +6963,90 @@ impl Workspace {
         }
     }
 
+    /// Opens Go to Anything on "find ", to search every session's output.
+    fn swarm_find_in_all_sessions(&mut self, ctx: &mut ViewContext<Self>) {
+        self.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+        self.palette.update(ctx, |palette, ctx| palette.insert_query_text("find ", ctx));
+    }
+
+    /// Asks the daemon on this Mac and on each connected host to search its sessions' output
+    /// for `text`, then lists the matching lines in Go to Anything.
+    #[cfg(unix)]
+    fn swarm_search_sessions(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        use crate::view_components::ToastFlavor;
+        use warp_terminal::local_tty::daemon;
+        let text = text.trim().to_string();
+        let Some(daemons) = daemon::daemons().filter(|_| !text.is_empty()) else { return };
+        let mut hosts = vec![None];
+        hosts.extend(crate::swarm::sessions::SwarmSessions::as_ref(ctx).followed_hosts().into_iter().map(Some));
+        let toast = DismissibleToast::new(format!("Searching every session for “{text}”…"), ToastFlavor::Default)
+            .with_object_id("swarm-search".to_string());
+        self.toast_stack.update(ctx, |stack, ctx| stack.add_persistent_toast(toast, ctx));
+        let query = text.clone();
+        let rx = daemons.run(async move { daemon::search_sessions(daemons, hosts, query).await });
+        let _ = ctx.spawn(async move { rx.recv().await }, move |me, found, ctx| {
+            me.toast_stack.update(ctx, |stack, ctx| stack.dismiss_older_toasts("swarm-search", ctx));
+            let Ok(mut found) = found else { return };
+            if found.is_empty() {
+                let toast = DismissibleToast::new(format!("No session's output has “{text}”."), ToastFlavor::Default);
+                me.toast_stack.update(ctx, |stack, ctx| stack.add_ephemeral_toast(toast, ctx));
+                return;
+            }
+            // Sessions with the most recent output first.
+            let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+            let last_output = |host: &Option<String>, id: &str| {
+                sessions.sessions_on(host.as_deref()).iter().find(|s| s.id == id).map_or(0, |s| s.last_output_ms)
+            };
+            found.sort_by_key(|(host, f)| std::cmp::Reverse(last_output(host, &f.id)));
+            *crate::swarm::FIND_RESULTS.lock().unwrap_or_else(|e| e.into_inner()) = Some((text.clone(), found));
+            me.open_palette(PaletteMode::Navigation, PaletteSource::Keybinding, ctx);
+            me.palette.update(ctx, |palette, ctx| palette.insert_query_text(&format!("find {text}"), ctx));
+        });
+    }
+
+    /// Shows the daemon session `session_id` on `host` with Find on `text`, reattaching it
+    /// first when it isn't open in this window.
+    #[cfg(unix)]
+    fn swarm_find_in_session(
+        &mut self,
+        host: Option<String>,
+        session_id: String,
+        text: String,
+        ctx: &mut ViewContext<Self>,
+    ) {
+        use warp_terminal::local_tty::daemon::META_SESSION_ID;
+        let session = crate::swarm::sessions::SwarmSessions::as_ref(ctx)
+            .sessions_on(host.as_deref())
+            .iter()
+            .find(|s| s.id == session_id)
+            .cloned();
+        let Some(session) = session else {
+            self.swarm_alert("The session is gone", "It ended or was closed after the search.", ctx);
+            return;
+        };
+        let warp_id = session.ui.get(META_SESSION_ID).and_then(|v| v.parse::<u64>().ok());
+        let open = warp_id.and_then(|warp_id| {
+            self.tabs.iter().enumerate().find_map(|(index, tab)| {
+                let views = tab.pane_group.as_ref(ctx).terminal_views(ctx);
+                let view = views
+                    .into_iter()
+                    .find(|v| v.as_ref(ctx).active_block_session_id().map(|id| id.as_u64()) == Some(warp_id))?;
+                Some((index, view))
+            })
+        });
+        if let Some((index, view)) = open {
+            self.activate_tab(index, ctx);
+            ctx.focus(&view);
+            view.update(ctx, |view, ctx| view.swarm_find(&text, ctx));
+            return;
+        }
+        self.add_swarm_tab(&crate::swarm::ReattachTab::for_session(host.as_deref(), &session), ctx);
+        let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
+        // Find once the session's output has been replayed into the new tab.
+        let replayed = async { warpui::r#async::Timer::after(std::time::Duration::from_millis(1500)).await };
+        let _ = ctx.spawn(replayed, move |_, _, ctx| view.update(ctx, |view, ctx| view.swarm_find(&text, ctx)));
+    }
+
     /// Opens Go to Anything on "rename pane to " for the focused pane's session.
     fn swarm_choose_pane_name(&mut self, ctx: &mut ViewContext<Self>) {
         let Some(view) = self.active_tab_pane_group().as_ref(ctx).focused_session_view(ctx) else { return };
@@ -27628,6 +27712,15 @@ impl TypedActionView for Workspace {
             SwarmImportTheme => self.swarm_import_theme(ctx),
             SwarmChoosePaneName => self.swarm_choose_pane_name(ctx),
             SwarmChooseDirectory => self.swarm_choose_directory(ctx),
+            SwarmFindInAllSessions => self.swarm_find_in_all_sessions(ctx),
+            #[cfg(unix)]
+            SwarmSearchSessions(text) => self.swarm_search_sessions(text.clone(), ctx),
+            #[cfg(unix)]
+            SwarmFindInSession { host, session_id, text } => {
+                self.swarm_find_in_session(host.clone(), session_id.clone(), text.clone(), ctx)
+            }
+            #[cfg(not(unix))]
+            SwarmSearchSessions(_) | SwarmFindInSession { .. } => {}
             SwarmCdTo { warp_session_id, host, path } => self.swarm_cd_to(*warp_session_id, host.clone(), path.clone(), ctx),
             #[cfg(unix)]
             SwarmRenamePane { warp_session_id, name } => {

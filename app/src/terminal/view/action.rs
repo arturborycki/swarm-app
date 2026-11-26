@@ -348,6 +348,11 @@ pub enum TerminalAction {
     SwarmCopyModeSearch,
     SwarmCopyModeYank,
     SwarmCopyModeExit,
+    /// The prefix key pressed twice: sends the prefix itself to the program (`Ctrl-B Ctrl-B`).
+    SwarmSendPrefix(u8),
+    /// Resize mode: the arrow keys resize the pane until Esc or Enter (`Ctrl-B r`).
+    SwarmResizeModeEnter,
+    SwarmResizeModeExit,
     ToggleSnackbarInActivePane,
     MakeAllParticipantsReaders {
         reason: RoleUpdateReason,
@@ -689,6 +694,9 @@ impl fmt::Debug for TerminalAction {
             SwarmCopyModeSearch => f.write_str("SwarmCopyModeSearch"),
             SwarmCopyModeYank => f.write_str("SwarmCopyModeYank"),
             SwarmCopyModeExit => f.write_str("SwarmCopyModeExit"),
+            SwarmSendPrefix(_) => f.write_str("SwarmSendPrefix"),
+            SwarmResizeModeEnter => f.write_str("SwarmResizeModeEnter"),
+            SwarmResizeModeExit => f.write_str("SwarmResizeModeExit"),
             ToggleSnackbarInActivePane => write!(f, "ToggleSnackbarInActivePane"),
             MakeAllParticipantsReaders { reason } => {
                 write!(f, "MakeAllParticipantsReaders {{ reason: {reason:?} }}")

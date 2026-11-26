@@ -46,6 +46,8 @@ impl SyncDataSource for DataSource {
     ) -> Result<Vec<QueryResult<Self::Action>>, DataSourceRunErrorWrapper> {
         let term = query.text.trim();
         let mut items = Vec::new();
+        // Rows that aren't matched against the query: Find in All Sessions.
+        let mut found_items = Vec::new();
         #[cfg(unix)]
         {
             use crate::swarm::sessions::SwarmSessions;
@@ -77,6 +79,50 @@ impl SyncDataSource for DataSource {
                         }
                         items.push((format!("cd {shown}"), place.clone(), WorkspaceAction::SwarmCdTo { warp_session_id, host: host.clone(), path: folder }));
                     }
+                }
+            }
+            // "find <text>": lines with the text in every session's output, once searched.
+            if let Some(text) = find_text(term) {
+                let results = crate::swarm::FIND_RESULTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                match results.filter(|(searched, _)| *searched == text) {
+                    Some((_, found)) => {
+                        let mut rank = 0;
+                        for (host, f) in found {
+                            let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
+                            let name = sessions
+                                .sessions_on(host.as_deref())
+                                .iter()
+                                .find(|s| s.id == f.id)
+                                .map(|s| s.display_name().to_string())
+                                .unwrap_or_else(|| "ended session".to_string());
+                            for hit in &f.hits {
+                                let (start, len) = (hit.at.0 as usize, hit.at.1 as usize);
+                                let action = WorkspaceAction::SwarmFindInSession {
+                                    host: host.clone(),
+                                    session_id: f.id.clone(),
+                                    text: text.to_string(),
+                                };
+                                // Sessions and their lines in the daemons' order: newest first.
+                                found_items.push(SearchItem {
+                                    label: hit.line.clone(),
+                                    detail: format!("{name} · {place}"),
+                                    action,
+                                    match_result: FuzzyMatchResult {
+                                        score: 100_000 - rank,
+                                        matched_indices: (start..start + len).collect(),
+                                    },
+                                });
+                                rank += 1;
+                            }
+                        }
+                    }
+                    None if !text.is_empty() => found_items.push(SearchItem {
+                        label: format!("Find “{text}” in all sessions"),
+                        detail: "every session's output, on this Mac and connected hosts".to_string(),
+                        action: WorkspaceAction::SwarmSearchSessions(text.to_string()),
+                        match_result: FuzzyMatchResult { score: 100_000, matched_indices: Vec::new() },
+                    }),
+                    None => {}
                 }
             }
             // "rename pane to <name>": names the focused pane's session.
@@ -214,8 +260,9 @@ impl SyncDataSource for DataSource {
         }
         #[cfg(not(unix))]
         let _ = app;
-        Ok(items
-            .into_iter()
+        let found_items = found_items.into_iter().map(QueryResult::from);
+        Ok(found_items
+            .chain(items.into_iter()
             .filter_map(|(label, detail, action)| {
                 let mut match_result = if term.is_empty() {
                     FuzzyMatchResult { score: 0, matched_indices: Vec::new() }
@@ -234,9 +281,15 @@ impl SyncDataSource for DataSource {
                     match_result.score += 1000;
                 }
                 Some(QueryResult::from(SearchItem { label, detail, action, match_result }))
-            })
+            }))
             .collect())
     }
+}
+
+/// The text after "find " in `term` ("find" alone: empty), for Find in All Sessions.
+fn find_text(term: &str) -> Option<&str> {
+    let rest = term.strip_prefix("find").or_else(|| term.strip_prefix("Find"))?;
+    (rest.is_empty() || rest.starts_with(' ')).then(|| rest.trim())
 }
 
 /// `term` as a port number: "3000", ":3000" or "port 3000".
@@ -325,7 +378,17 @@ impl crate::search::item::SearchItem for SearchItem {
 
 #[cfg(test)]
 mod tests {
-    use super::{looks_like_host, typed_folder, typed_port};
+    use super::{find_text, looks_like_host, typed_folder, typed_port};
+
+    #[test]
+    fn find_queries() {
+        assert_eq!(find_text("find"), Some(""));
+        assert_eq!(find_text("find  disk full "), Some("disk full"));
+        assert_eq!(find_text("Find Error"), Some("Error"));
+        for no in ["finder", "fin", "refind x", ""] {
+            assert_eq!(find_text(no), None, "{no}");
+        }
+    }
 
     #[test]
     fn typed_ports() {
