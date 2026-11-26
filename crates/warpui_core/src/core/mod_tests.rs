@@ -1760,6 +1760,14 @@ fn test_priority_bindings_win_over_inner_views() -> Result<()> {
         app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("ctrl-b")?, false)?;
         app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("x")?, false)?;
         assert_eq!(inner.read(&app, |v, _| v.handled.clone()), ["inner x"]);
+
+        // A prefix pressed, then a key from elsewhere (focus moved): the prefix is dropped,
+        // so the next key back here is a plain key.
+        let elsewhere = app.add_typed_action_view(window_id, |_| view("elsewhere"));
+        app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("ctrl-b")?, false)?;
+        app.dispatch_keystroke(window_id, &[elsewhere.id()], &Keystroke::parse("y")?, false)?;
+        app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("c")?, false)?;
+        assert_eq!(outer.read(&app, |v, _| v.handled.clone()), ["outer ctrl-b c"]);
         Ok(())
     })
 }

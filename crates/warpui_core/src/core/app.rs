@@ -638,6 +638,9 @@ pub struct AppContext {
     /// they win over a focused child's own bindings (swarm-term's prefix keys over the input
     /// editor's).
     priority_matcher: Matcher,
+    /// The responder chain a priority key sequence was started in: a key from anywhere else
+    /// (focus moved) drops it, so a prefix pressed in one pane can't act later in another.
+    priority_pending_chain: Option<Vec<EntityId>>,
     next_task_id: usize,
     weak_self: rc::Weak<RefCell<Self>>,
     pub(super) subscriptions: EntityIdMap<Vec<Subscription>>,
@@ -812,6 +815,7 @@ impl AppContext {
             rendering_config: Default::default(),
             keystroke_matcher: Default::default(),
             priority_matcher: Default::default(),
+            priority_pending_chain: None,
             disabled_key_bindings_windows: Default::default(),
             next_task_id: 0,
             weak_self: rc::Weak::default(),
@@ -2212,11 +2216,17 @@ impl AppContext {
                 ctx.set.insert("IMEOpen");
             }
         }
+        if self.priority_pending_chain.take().is_some_and(|chain| chain != responder_chain) {
+            self.priority_matcher.clear_pending();
+        }
         for (i, ctx) in context_chain.iter().enumerate().rev() {
             match self.priority_matcher.push_keystroke(keystroke.clone(), responder_chain[i], ctx) {
                 MatchResult::None => {}
                 // The start of a key sequence: held until the next key decides it.
-                MatchResult::Pending => return Ok(true),
+                MatchResult::Pending => {
+                    self.priority_pending_chain = Some(responder_chain.to_vec());
+                    return Ok(true);
+                }
                 MatchResult::Action(action) => {
                     if self.dispatch_typed_action(window_id, &responder_chain[0..=i], action.as_ref(), log::Level::Info) {
                         return Ok(true);

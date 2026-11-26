@@ -83,9 +83,15 @@ impl SyncDataSource for DataSource {
             }
             // "find <text>": lines with the text in every session's output, once searched.
             if let Some(text) = find_text(term) {
-                let results = crate::swarm::FIND_RESULTS.lock().unwrap_or_else(|e| e.into_inner()).clone();
-                match results.filter(|(searched, _)| *searched == text) {
-                    Some((_, found)) => {
+                let results = crate::swarm::recent_find_results(Some(text), |r| (r.found.clone(), r.not_searched.clone()));
+                let search = |label: String, detail: String, score: i64| SearchItem {
+                    label,
+                    detail,
+                    action: WorkspaceAction::SwarmSearchSessions(crate::swarm::SearchText(text.to_string())),
+                    match_result: FuzzyMatchResult { score, matched_indices: Vec::new() },
+                };
+                match results {
+                    Some((found, not_searched)) => {
                         let mut rank = 0;
                         for (host, f) in found {
                             let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
@@ -96,32 +102,34 @@ impl SyncDataSource for DataSource {
                                 .map(|s| s.display_name().to_string())
                                 .unwrap_or_else(|| "ended session".to_string());
                             for hit in &f.hits {
-                                let (start, len) = (hit.at.0 as usize, hit.at.1 as usize);
                                 let action = WorkspaceAction::SwarmFindInSession {
                                     host: host.clone(),
                                     session_id: f.id.clone(),
-                                    text: text.to_string(),
+                                    text: crate::swarm::SearchText(text.to_string()),
                                 };
+                                let (label, matched_indices) = hit_label(hit);
                                 // Sessions and their lines in the daemons' order: newest first.
                                 found_items.push(SearchItem {
-                                    label: hit.line.clone(),
+                                    label,
                                     detail: format!("{name} · {place}"),
                                     action,
-                                    match_result: FuzzyMatchResult {
-                                        score: 100_000 - rank,
-                                        matched_indices: (start..start + len).collect(),
-                                    },
+                                    match_result: FuzzyMatchResult { score: 100_000 - rank, matched_indices },
                                 });
                                 rank += 1;
                             }
                         }
+                        let detail = if not_searched.is_empty() {
+                            "to include output since".to_string()
+                        } else {
+                            format!("not searched: {}", not_searched.join(", "))
+                        };
+                        found_items.push(search(format!("Search all sessions again for “{text}”"), detail, 100_000 - rank));
                     }
-                    None if !text.is_empty() => found_items.push(SearchItem {
-                        label: format!("Find “{text}” in all sessions"),
-                        detail: "every session's output, on this Mac and connected hosts".to_string(),
-                        action: WorkspaceAction::SwarmSearchSessions(text.to_string()),
-                        match_result: FuzzyMatchResult { score: 100_000, matched_indices: Vec::new() },
-                    }),
+                    None if !text.is_empty() => found_items.push(search(
+                        format!("Find “{text}” in all sessions"),
+                        "every session's output, on this Mac and connected hosts".to_string(),
+                        100_000,
+                    )),
                     None => {}
                 }
             }
@@ -284,6 +292,23 @@ impl SyncDataSource for DataSource {
             }))
             .collect())
     }
+}
+
+/// A matching line as a row's label, with the match's characters to highlight. The line
+/// comes from a host's daemon: whatever could start an escape sequence is dropped (then
+/// nothing is highlighted), and the match is kept within the line.
+#[cfg(unix)]
+fn hit_label(hit: &warp_terminal::local_tty::daemon::SearchHit) -> (String, Vec<usize>) {
+    const LONGEST: usize = 400;
+    if hit.line.chars().any(warp_terminal::local_tty::daemon::is_unsafe_char) {
+        let clean: String = warp_terminal::local_tty::daemon::clean_text(&hit.line).chars().take(LONGEST).collect();
+        return (clean, Vec::new());
+    }
+    let label: String = hit.line.chars().take(LONGEST).collect();
+    let chars = label.chars().count();
+    let start = (hit.at.0 as usize).min(chars);
+    let end = start.saturating_add(hit.at.1 as usize).min(chars);
+    (label, (start..end).collect())
 }
 
 /// The text after "find " in `term` ("find" alone: empty), for Find in All Sessions.

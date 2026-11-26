@@ -118,6 +118,8 @@ pub fn initialize_settings_for_tests_with_mode(
     VimBannerSettings::register(app);
     SharedObjectLimitBannerSettings::register(app);
     WarpDriveSettings::register(app);
+    crate::settings::swarm_updates::SwarmUpdateSettings::register(app);
+    crate::settings::swarm_keys::SwarmKeySettings::register(app);
     WindowSettings::register(app);
     SharedSessionSettings::register(app);
     CodeSettings::register(app);

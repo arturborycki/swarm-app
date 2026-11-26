@@ -206,9 +206,9 @@ pub enum WorkspaceAction {
     SwarmFindInAllSessions,
     /// Searches every session's output on this Mac and connected hosts for the text, then
     /// lists the matching lines in Go to Anything.
-    SwarmSearchSessions(String),
+    SwarmSearchSessions(crate::swarm::SearchText),
     /// Shows a daemon session (reattaching it if it isn't open) with Find on `text`.
-    SwarmFindInSession { host: Option<String>, session_id: String, text: String },
+    SwarmFindInSession { host: Option<String>, session_id: String, text: crate::swarm::SearchText },
     /// swarm-term: open Go to Anything to type a name for the focused pane's session.
     SwarmChoosePaneName,
     /// swarm-term: name (or, with `None`, un-name) one daemon session, by Warp session id.

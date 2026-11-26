@@ -63,6 +63,11 @@ impl Matcher {
         }
     }
 
+    /// Forgets the start of any key sequence.
+    pub fn clear_pending(&mut self) {
+        self.pending.clear();
+    }
+
     pub fn set_keymap(&mut self, keymap: Keymap) {
         self.pending.clear();
         self.keymap = keymap;

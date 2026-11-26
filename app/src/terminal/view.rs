@@ -20698,6 +20698,27 @@ impl TerminalView {
         self.find_bar.update(ctx, |bar, ctx| bar.set_query_text(text, ctx));
     }
 
+    /// [`Self::swarm_find`] once a reattached session's output has been replayed, if this
+    /// pane still has focus then (the user may have moved on; Find takes focus).
+    pub fn swarm_find_when_replayed(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        self.swarm_find_after(text, std::time::Instant::now() + std::time::Duration::from_secs(20), ctx);
+    }
+
+    fn swarm_find_after(&mut self, text: String, give_up: std::time::Instant, ctx: &mut ViewContext<Self>) {
+        if !ctx.is_self_or_child_focused() {
+            return;
+        }
+        if self.model.lock().swarm_replayed() {
+            self.swarm_find(&text, ctx);
+            return;
+        }
+        if std::time::Instant::now() >= give_up {
+            return;
+        }
+        let tick = async { warpui::r#async::Timer::after(std::time::Duration::from_millis(150)).await };
+        let _ = ctx.spawn(tick, move |me, _, ctx| me.swarm_find_after(text, give_up, ctx));
+    }
+
     fn show_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
         let model = self.model.lock();
         let inverted_blocklist = self.is_inverted_blocklist(ctx);
@@ -24142,6 +24163,10 @@ impl TerminalView {
 
     /// swarm-term: leaves copy mode, clearing its cursor or selection.
     /// swarm-term: turns resize mode on or off, with a toast saying how to use it while it's on.
+    pub fn swarm_end_resize_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        self.swarm_resize_mode(false, ctx);
+    }
+
     fn swarm_resize_mode(&mut self, on: bool, ctx: &mut ViewContext<Self>) {
         if self.swarm_resize_mode == on {
             return;
@@ -30064,11 +30089,13 @@ impl View for TerminalView {
     }
 
     fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        // swarm-term: resize mode ends when focus leaves the pane, from the input too.
+        if self.swarm_resize_mode && !ctx.is_self_or_child_focused() {
+            self.swarm_resize_mode(false, ctx);
+        }
         if blur_ctx.is_self_blurred() {
             // Make sure to close link tooltips when terminal view is not in focus.
             self.open_grid_link_tool_tip.take();
-            // swarm-term: resize mode ends when the pane loses focus.
-            self.swarm_resize_mode(false, ctx);
 
             self.maybe_report_focus_out(ctx);
             ctx.notify();
@@ -30106,11 +30133,16 @@ impl View for TerminalView {
         if self.swarm_resize_mode {
             context.set.insert("SwarmResizeMode");
         }
-        match crate::settings::swarm_keys::SwarmKeySettings::as_ref(app).prefix.as_str() {
-            "ctrl-b" => context.set.insert("SwarmPrefixCtrlB"),
-            "ctrl-a" => context.set.insert("SwarmPrefixCtrlA"),
-            _ => false,
-        };
+        // Prefix keys only from the terminal or its input, not from fields inside the pane
+        // (Find), where Ctrl-A and Ctrl-B edit text.
+        let focused = app.focused_view_id(self.window_id);
+        if focused == Some(self.view_id) || focused == Some(input.editor().id()) {
+            match crate::settings::swarm_keys::SwarmKeySettings::as_ref(app).prefix.as_str() {
+                "ctrl-b" => context.set.insert("SwarmPrefixCtrlB"),
+                "ctrl-a" => context.set.insert("SwarmPrefixCtrlA"),
+                _ => false,
+            };
+        }
         if model_lock.block_list().selection().is_some() {
             context.set.insert("ActiveBlockTextSelection");
         }

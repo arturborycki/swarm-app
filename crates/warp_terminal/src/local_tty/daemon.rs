@@ -23,7 +23,7 @@ use anyhow::{bail, Context, Result};
 use instant::Instant;
 pub use swarm_client::swarm_proto::VERSION;
 use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size};
-use swarm_client::{strip_terminal_responses, Attachment, Client, StreamEvent};
+use swarm_client::{Attachment, ReplyFilter, Client, StreamEvent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -354,7 +354,9 @@ async fn watch_once(
     }
 }
 
-pub use swarm_client::swarm_proto::{BlockedKind, ProgramStatus, SearchHit, SessionHits, StatusRecord, StatusState};
+pub use swarm_client::swarm_proto::{
+    clean_text, is_unsafe_char, BlockedKind, ProgramStatus, SearchHit, SessionHits, StatusRecord, StatusState,
+};
 
 /// Calls `on_change` with what the programs in `host`'s sessions report about
 /// themselves (OSC 7501 status, notifications, bells), now and after every
@@ -664,6 +666,7 @@ async fn run_bridge(
     let id = att.info.id.clone();
     let mut last_offset = att.replay_from;
     let mut guard_until: Option<Instant> = None;
+    let mut replies = ReplyFilter::default();
     let mut eol_marks = swarm_client::EolMarkFilter::default();
     // Replayed hooks carry the time they were written; live output is "now".
     let mut timed = false;
@@ -753,13 +756,21 @@ async fn run_bridge(
                 Ok(n) => {
                     let mut data = buf[..n].to_vec();
                     if guard_until.is_some_and(|t| Instant::now() < t) {
-                        data = strip_terminal_responses(&data);
+                        data = replies.push(&data);
+                    } else if replies.is_holding() {
+                        data = [replies.flush(), data].concat();
                     }
                     if !data.is_empty() && att.input(data).await.is_err() {
                         break;
                     }
                 }
             },
+            // The guard ended with a reply's start held: it was typing.
+            _ = tokio::time::sleep_until(guard_until.unwrap_or_else(Instant::now).into()), if replies.is_holding() => {
+                if att.input(replies.flush()).await.is_err() {
+                    break;
+                }
+            }
             c = ctl.recv() => match c {
                 Some(Ctl::Resize(size)) => {
                     quiet_output(&id, SEEN_GRACE);
@@ -1206,33 +1217,64 @@ pub async fn refresh_ports(daemons: &'static Daemons, hosts: Vec<Option<String>>
 }
 
 /// Lines with `text` in the output of sessions on each of `hosts` (`None`:
-/// this Mac), searched by each host's daemon. A host whose daemon is from
-/// another build is left out: an older one would drop the connection.
+/// this Mac), searched by each host's daemon, and what wasn't searched, as
+/// words for the user. A host whose daemon is from another build is left out:
+/// an older one would drop the connection.
 pub async fn search_sessions(
     daemons: &'static Daemons,
     hosts: Vec<Option<String>>,
     text: String,
-) -> Vec<(Option<String>, swarm_client::swarm_proto::SessionHits)> {
+) -> (Vec<(Option<String>, swarm_client::swarm_proto::SessionHits)>, Vec<String>) {
     let asks = hosts.into_iter().map(|host| {
-        let opts = swarm_client::swarm_proto::SearchOpts { text: text.clone(), case_sensitive: None, max_hits: 30 };
+        let opts = swarm_client::swarm_proto::SearchOpts { text: text.clone(), case_sensitive: None, max_hits: SEARCH_HITS };
         async move {
-            let found = async {
+            let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
+            // Connecting is within the time limit too: a host may not answer.
+            let searched = tokio::time::timeout(Duration::from_secs(30), async {
                 let client = daemons.client(host.as_deref()).await?;
                 if client.daemon().version != VERSION {
-                    return Ok(Vec::new());
+                    anyhow::bail!("runs another version of Swarm");
                 }
-                tokio::time::timeout(Duration::from_secs(30), client.search(opts)).await?
-            }
+                client.search(opts).await
+            })
             .await
-            .unwrap_or_else(|e: anyhow::Error| {
-                log::debug!("swarm: search on {}: {e:#}", host.as_deref().unwrap_or("this Mac"));
-                Vec::new()
-            });
-            found.into_iter().map(move |f| (host.clone(), f)).collect::<Vec<_>>()
+            .unwrap_or_else(|_| Err(anyhow::anyhow!("didn't answer in time")));
+            match searched {
+                Ok(results) => {
+                    let mut notes = Vec::new();
+                    if !results.skipped.is_empty() {
+                        let n = results.skipped.len();
+                        notes.push(format!("{n} session{} on {place}", if n == 1 { "" } else { "s" }));
+                    }
+                    // A host's answer is trusted only so far: a few lines per session.
+                    let found = results
+                        .found
+                        .into_iter()
+                        .map(|mut f| {
+                            f.hits.truncate(SEARCH_HITS as usize);
+                            (host.clone(), f)
+                        })
+                        .collect::<Vec<_>>();
+                    (found, notes)
+                }
+                Err(e) => {
+                    log::debug!("swarm: search on {place}: {e:#}");
+                    (Vec::new(), vec![format!("{place} ({e:#})")])
+                }
+            }
         }
     });
-    futures::future::join_all(asks).await.into_iter().flatten().collect()
+    let mut found = Vec::new();
+    let mut not_searched = Vec::new();
+    for (f, n) in futures::future::join_all(asks).await {
+        found.extend(f);
+        not_searched.extend(n);
+    }
+    (found, not_searched)
 }
+
+/// Matching lines asked for per session.
+const SEARCH_HITS: u32 = 30;
 
 /// Ports found by the last [`refresh_ports`]: (host, daemon session id, port).
 pub fn detected_ports() -> Vec<(Option<String>, String, swarm_client::swarm_proto::ListeningPort)> {

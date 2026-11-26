@@ -1444,7 +1444,7 @@ impl AppearanceSettingsPageView {
             tools_panel_widgets.push(Box::new(ToolsPanelGlobalSearchWidget::default()));
         }
         // swarm-term: no Warp Drive.
-        if !crate::swarm::SWARM_CHROME {
+        if !crate::swarm::HIDE_WARP_SERVICES {
             tools_panel_widgets.push(Box::new(ToolsPanelWarpDriveWidget::default()));
         }
         if !tools_panel_widgets.is_empty() {
