@@ -22711,6 +22711,7 @@ impl TerminalView {
 
     fn handle_input_event(&mut self, event: &InputEvent, ctx: &mut ViewContext<Self>) {
         match event {
+            InputEvent::SwarmDroppedFiles(paths) => self.drag_and_drop_files(paths, ctx),
             InputEvent::Enter => self.clear_prompt_suggestions(ctx),
             InputEvent::PageUp => self.page_up(ctx),
             InputEvent::PageDown => self.page_down(ctx),
@@ -27351,7 +27352,8 @@ impl TerminalView {
             return;
         }
 
-        if !is_in_long_running_command {
+        // swarm-term: no AI input to attach images to; their paths are typed like any file's.
+        if !is_in_long_running_command && !crate::swarm::SWARM_CHROME {
             // Check for image file paths to be auto-attached
             let num_images = image_filepaths.len();
 

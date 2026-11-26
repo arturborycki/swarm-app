@@ -1919,6 +1919,10 @@ pub struct EditorView {
     /// the buffer. See [`EditorOptions::drag_drop_path_transformer`].
     drag_drop_path_transformer: Option<PathTransformerFn>,
 
+    /// swarm-term: dropped files go to the parent ([`Event::DroppedFiles`]) instead of being
+    /// handled here, so a session on another host gets them uploaded.
+    forward_drops: bool,
+
     process_attached_images_future_handle: Option<SpawnedFutureHandle>,
 
     is_password: bool,
@@ -2977,6 +2981,10 @@ impl EditorView {
         self.drag_drop_path_transformer = transformer;
     }
 
+    pub fn set_forward_drops(&mut self, forward: bool) {
+        self.forward_drops = forward;
+    }
+
     fn clipboard_content(&mut self, ctx: &mut ViewContext<Self>) -> String {
         let content = ctx.clipboard().read();
         self.clipboard_text_content(content)
@@ -3258,6 +3266,7 @@ impl EditorView {
             ai_context_menu_state,
             delegate_paste_handling: options.delegate_paste_handling,
             drag_drop_path_transformer: options.drag_drop_path_transformer,
+            forward_drops: false,
             process_attached_images_future_handle: None,
             is_password: options.is_password,
             keymap_context_modifier: options.keymap_context_modifier,
@@ -8053,6 +8062,10 @@ impl EditorView {
         // Image paths are forwarded to the parent unchanged so the host can still read them
         // from the filesystem (the path transformer, if any, only applies to text insertion).
         let paths_as_strings: Vec<String> = paths.iter().map(|path| path.to_string()).collect();
+        if self.forward_drops {
+            ctx.emit(Event::DroppedFiles(paths_as_strings));
+            return;
+        }
         let image_filepaths =
             warpui::clipboard_utils::get_image_filepaths_from_paths(&paths_as_strings);
 
@@ -8491,6 +8504,8 @@ pub enum Event {
     },
     /// Request parent to process image file paths from drag-and-drop
     DroppedImageFiles(Vec<String>),
+    /// swarm-term: every dropped path, for the parent to handle (see `set_forward_drops`).
+    DroppedFiles(Vec<String>),
     IgnoreAutosuggestion {
         suggestion: String,
     },
