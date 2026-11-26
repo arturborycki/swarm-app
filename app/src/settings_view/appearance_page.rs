@@ -1443,7 +1443,10 @@ impl AppearanceSettingsPageView {
         if cfg!(feature = "local_fs") && FeatureFlag::GlobalSearch.is_enabled() {
             tools_panel_widgets.push(Box::new(ToolsPanelGlobalSearchWidget::default()));
         }
-        tools_panel_widgets.push(Box::new(ToolsPanelWarpDriveWidget::default()));
+        // swarm-term: no Warp Drive.
+        if !crate::swarm::SWARM_CHROME {
+            tools_panel_widgets.push(Box::new(ToolsPanelWarpDriveWidget::default()));
+        }
         if !tools_panel_widgets.is_empty() {
             categories.push(Category::new("Tools panel", tools_panel_widgets));
         }

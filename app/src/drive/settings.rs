@@ -47,6 +47,10 @@ impl WarpDriveSettings {
     /// feature remains unavailable until then.
     pub fn is_warp_drive_available(app: &warpui::AppContext) -> bool {
         use warpui::SingletonEntity as _;
+        // swarm-term: no Warp Drive; it keeps its objects in a Warp account.
+        if crate::swarm::SWARM_CHROME {
+            return false;
+        }
         !FeatureFlag::SkipFirebaseAnonymousUser.is_enabled()
             || !crate::auth::AuthStateProvider::as_ref(app)
                 .get()

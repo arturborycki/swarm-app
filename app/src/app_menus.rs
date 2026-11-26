@@ -487,8 +487,10 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             Some("alt-cmd-f"),
         ));
     }
+    if !crate::swarm::SWARM_CHROME {
+        items.push(updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx));
+    }
     items.extend(vec![
-        updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::CommandPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx),

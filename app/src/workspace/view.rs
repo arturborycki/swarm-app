@@ -26194,7 +26194,7 @@ impl Workspace {
                 entry_focus: GlobalSearchEntryFocus::Results,
             });
         }
-        if *WarpDriveSettings::as_ref(ctx).enable_warp_drive {
+        if WarpDriveSettings::is_warp_drive_enabled(ctx) {
             views.push(ToolPanelView::WarpDrive);
         }
         views
