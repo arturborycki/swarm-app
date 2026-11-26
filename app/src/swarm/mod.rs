@@ -10,6 +10,14 @@ pub mod connect;
 
 /// Tabs the focused pane can move to, as (pane group, title), for Go to Anything's
 /// "Move pane to …" rows. Set when the palette opens.
+/// The focused pane's session (its Warp session id and name) for Go to Anything's "Rename pane
+/// to …" row. Set when Rename Pane… opens the palette.
+pub static PANE_RENAME_TARGET: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
+
+/// The focused pane's session (its Warp session id and host) for Go to Anything's "cd …" rows.
+/// Set when Go to Directory… opens the palette.
+pub static CD_TARGET: std::sync::Mutex<Option<(u64, Option<String>)>> = std::sync::Mutex::new(None);
+
 pub static PANE_MOVE_TARGETS: std::sync::Mutex<Vec<(warpui::EntityId, String)>> = std::sync::Mutex::new(Vec::new());
 pub mod copy_motion;
 pub mod theme_import;

@@ -53,6 +53,45 @@ impl SyncDataSource for DataSource {
             let sessions = SwarmSessions::as_ref(app);
             let mut hosts: Vec<Option<String>> = vec![None];
             hosts.extend(daemon::known_hosts().into_iter().map(Some));
+            // "cd <folder>": folders the focused session's host has sessions in, or a typed path.
+            if let Some(rest) = term.strip_prefix("cd").filter(|r| r.is_empty() || r.starts_with(' ')) {
+                let target = crate::swarm::CD_TARGET.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some((warp_session_id, host)) = target {
+                    let typed = rest.trim();
+                    let place = host.clone().unwrap_or_else(|| "this Mac".to_string());
+                    let mut folders: Vec<String> =
+                        sessions.sessions_on(host.as_deref()).iter().filter_map(|s| s.cwd.clone()).collect();
+                    folders.sort();
+                    folders.dedup();
+                    let typed_path = (typed.starts_with('/') || typed.starts_with('~')).then(|| typed.to_string());
+                    if let Some(path) = typed_path.as_ref().filter(|p| !folders.contains(p)) {
+                        items.push((format!("cd {path}"), place.clone(), WorkspaceAction::SwarmCdTo { warp_session_id, host: host.clone(), path: path.clone() }));
+                    }
+                    for folder in folders {
+                        let shown = match host {
+                            None => crate::swarm::home_relative(&folder),
+                            Some(_) => crate::swarm::remote_home_relative(&folder),
+                        };
+                        if !typed.is_empty() && typed_path.is_none() && !shown.to_lowercase().contains(&typed.to_lowercase()) {
+                            continue;
+                        }
+                        items.push((format!("cd {shown}"), place.clone(), WorkspaceAction::SwarmCdTo { warp_session_id, host: host.clone(), path: folder }));
+                    }
+                }
+            }
+            // "rename pane to <name>": names the focused pane's session.
+            if let Some(name) = term.strip_prefix("rename pane to").or_else(|| term.strip_prefix("Rename pane to")) {
+                let target = crate::swarm::PANE_RENAME_TARGET.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                if let Some((warp_session_id, current)) = target {
+                    let name = name.trim();
+                    let (label, new) = if name.is_empty() {
+                        ("Clear the pane's name".to_string(), None)
+                    } else {
+                        (format!("Rename pane to {name}"), Some(name.to_string()))
+                    };
+                    items.push((label, format!("now {current}"), WorkspaceAction::SwarmRenamePane { warp_session_id, name: new }));
+                }
+            }
             // "move pane …": the tabs the focused pane can move into.
             if term.to_lowercase().starts_with("move") {
                 let targets = crate::swarm::PANE_MOVE_TARGETS.lock().unwrap_or_else(|e| e.into_inner()).clone();

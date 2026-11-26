@@ -1219,6 +1219,7 @@ impl VerticalTabsPanelState {
         // Keep in step with `render_groups`.
         if self.activity_only {
             indices.retain(|&index| swarm_tab_has_activity(&tabs[index], app));
+            swarm_sort_by_priority(&mut indices, |&index| index, tabs, app);
         }
         indices
     }
@@ -1921,6 +1922,51 @@ fn swarm_activity_summary(workspace: &Workspace, app: &AppContext) -> String {
 /// swarm-term: whether a session in `tab` has something to report: its
 /// program needs the user, failed, finished or reports work, or it has
 /// unread output.
+/// swarm-term: Activity's order within each group (groups keep their order): sessions that need
+/// you, then failed, done, working, and unread ones.
+fn swarm_sort_by_priority<T>(items: &mut [T], index_of: impl Fn(&T) -> usize, tabs: &[TabData], app: &AppContext) {
+    let mut group_order: Vec<Option<TabGroupId>> = Vec::new();
+    for item in items.iter() {
+        let group = tabs[index_of(item)].group_id;
+        if !group_order.contains(&group) {
+            group_order.push(group);
+        }
+    }
+    items.sort_by_cached_key(|item| {
+        let tab = &tabs[index_of(item)];
+        let group = group_order.iter().position(|g| *g == tab.group_id).unwrap_or(usize::MAX);
+        (group, swarm_activity_rank(tab, app))
+    });
+}
+
+/// swarm-term: how urgent a tab is, by its most urgent session (lower first).
+fn swarm_activity_rank(tab: &TabData, app: &AppContext) -> u8 {
+    #[cfg(unix)]
+    {
+        use crate::swarm::sessions::SessionMark;
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(app);
+        tab.pane_group
+            .as_ref(app)
+            .terminal_views(app)
+            .iter()
+            .filter_map(|view| view.as_ref(app).active_block_session_id().and_then(|id| sessions.status_for(id.as_u64())))
+            .map(|status| match status.mark {
+                SessionMark::Blocked => 0,
+                SessionMark::Attention => 1,
+                SessionMark::Done => 2,
+                _ if status.program.is_some() => 3,
+                _ => 4,
+            })
+            .min()
+            .unwrap_or(5)
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = (tab, app);
+        0
+    }
+}
+
 fn swarm_tab_has_activity(tab: &TabData, app: &AppContext) -> bool {
     #[cfg(unix)]
     {
@@ -2180,7 +2226,10 @@ fn render_groups(
 
     // swarm-term: Activity lists only sessions with something to report.
     let visible_tabs: Vec<(usize, Option<Vec<PaneId>>)> = if state.activity_only {
-        visible_tabs.into_iter().filter(|(index, _)| swarm_tab_has_activity(&workspace.tabs[*index], app)).collect()
+        let mut visible: Vec<_> =
+            visible_tabs.into_iter().filter(|(index, _)| swarm_tab_has_activity(&workspace.tabs[*index], app)).collect();
+        swarm_sort_by_priority(&mut visible, |(index, _)| *index, &workspace.tabs, app);
+        visible
     } else {
         visible_tabs
     };

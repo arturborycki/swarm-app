@@ -639,6 +639,7 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
                 swarm_workspace_item_with_key("Navigate Forward", WorkspaceAction::SwarmNavigateForward, Some("ctrl-cmd-]")),
                 MenuItem::Separator,
                 swarm_workspace_item_with_key("Copy Mode", WorkspaceAction::SwarmCopyMode, Some("cmd-shift-X")),
+                swarm_workspace_item_with_key("Go to Directory…", WorkspaceAction::SwarmChooseDirectory, Some("cmd-shift-G")),
                 swarm_workspace_item_with_key("Insert Path…", WorkspaceAction::SwarmInsertPath, Some("cmd-shift-I")),
                 swarm_workspace_item_with_key("Quick Look Selection", WorkspaceAction::SwarmQuickLook, Some("cmd-shift-Y")),
             ],
@@ -650,6 +651,7 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
             [
                 swarm_workspace_item("Balance Splits", WorkspaceAction::SwarmBalanceSplits),
                 swarm_workspace_item("Move Pane to New Tab", WorkspaceAction::SwarmMovePaneToNewTab),
+                swarm_workspace_item("Rename Pane…", WorkspaceAction::SwarmChoosePaneName),
                 swarm_workspace_item("Move Pane to Tab…", WorkspaceAction::SwarmChooseTabForPane),
                 swarm_workspace_item("Move Pane to New Window", WorkspaceAction::SwarmMovePaneToNewWindow),
                 swarm_workspace_item("Move Tab to New Window", WorkspaceAction::SwarmMoveTabToNewWindow),

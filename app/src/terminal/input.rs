@@ -1031,6 +1031,8 @@ pub enum InputEmptyStateChangeReason {
 }
 
 pub enum Event {
+    /// swarm-term: files dropped on the input, handled as a drop on the terminal.
+    SwarmDroppedFiles(Vec<String>),
     AutosuggestionAccepted,
     ClearSelectedBlock,
     PageUp,
@@ -11840,6 +11842,7 @@ impl Input {
             EditorEvent::Paste => {
                 self.process_paste_event(ctx);
             }
+            EditorEvent::DroppedFiles(paths) => ctx.emit(Event::SwarmDroppedFiles(paths.clone())),
             EditorEvent::DroppedImageFiles(image_filepaths) => {
                 // Handle image processing from EditorView drag-and-drop
                 let num_attached =
@@ -16322,6 +16325,7 @@ impl Input {
             self.editor.update(ctx, |editor, _| {
                 editor.set_shell_family(session.shell().shell_type().into());
                 editor.set_drag_drop_path_transformer(transformer);
+                editor.set_forward_drops(crate::swarm::SWARM_CHROME);
             });
             self.input_suggestions.update(ctx, |input_suggestions, _| {
                 input_suggestions.set_path_separators(session.path_separators());
