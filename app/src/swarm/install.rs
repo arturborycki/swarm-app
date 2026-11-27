@@ -32,6 +32,9 @@ const STAGED_PREFIX: &str = ".Swarm-update-";
 
 const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(15 * 60);
 
+/// Largest update downloaded (a release DMG is about 150 MB).
+const MAX_DOWNLOAD: u64 = 1024 * 1024 * 1024;
+
 /// An update copied next to the installed app, ready to swap in.
 pub struct Staged {
     staged: PathBuf,
@@ -63,13 +66,31 @@ pub fn take_pending() -> Option<Staged> {
     PENDING.lock().unwrap_or_else(|e| e.into_inner()).take()
 }
 
-/// Swaps in the waiting update as Swarm quits, without starting it again: the next launch is
-/// the new version.
+/// Whether to start Swarm again once it has quit (with `true`: without coming
+/// to the front), and when [`install`] asked. A quit the user cancelled
+/// doesn't count later: only a quit soon after asking starts Swarm again.
+static RELAUNCH: std::sync::Mutex<Option<(bool, std::time::Instant)>> = std::sync::Mutex::new(None);
+const RELAUNCH_WITHIN: Duration = Duration::from_secs(120);
+
+/// Swaps in the waiting update as Swarm quits. After [`install`], the new
+/// version is then started; otherwise the next launch is the new version.
 pub fn install_pending_on_quit() {
+    let relaunch = RELAUNCH
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .take()
+        .filter(|(_, asked)| asked.elapsed() < RELAUNCH_WITHIN)
+        .map(|(background, _)| background);
     let Some(staged) = take_pending() else { return };
     match swap(&staged) {
         Ok(()) => log::info!("Installed Swarm {} on quit", staged.version),
         Err(e) => log::warn!("Couldn't install Swarm {} on quit: {e:#}", staged.version),
+    }
+    // Swapped or not, the user asked for Swarm to come back.
+    if let Some(background) = relaunch
+        && let Err(e) = open_after_exit(&staged.bundle, background)
+    {
+        log::warn!("Couldn't start Swarm again: {e:#}");
     }
 }
 
@@ -129,11 +150,19 @@ fn swap(staged: &Staged) -> Result<()> {
     Ok(())
 }
 
-/// Swaps the staged update in for the installed app and starts it once this
-/// process exits. The caller then quits the app. With `background`, the new
-/// version opens without coming to the front.
+/// Installs the staged update as Swarm quits and starts it once this process
+/// has exited. The caller then quits the app. Nothing changes on disk before
+/// the quit goes ahead: if the user cancels it, the update waits for the next
+/// quit. With `background`, the new version opens without coming to the front.
 pub fn install(staged: Staged, background: bool) -> Result<()> {
-    swap(&staged)?;
+    ensure!(staged.staged.exists(), "the downloaded update is gone; download it again");
+    set_pending(staged);
+    *RELAUNCH.lock().unwrap_or_else(|e| e.into_inner()) = Some((background, std::time::Instant::now()));
+    Ok(())
+}
+
+/// Opens `bundle` once this process has exited.
+fn open_after_exit(bundle: &Path, background: bool) -> Result<()> {
     let open_flags = if background { "-n -g" } else { "-n" };
     let wait_then_open = format!(
         "while kill -0 {} 2>/dev/null; do sleep 0.2; done; exec /usr/bin/open {open_flags} \"$@\"",
@@ -149,7 +178,7 @@ pub fn install(staged: Staged, background: bool) -> Result<()> {
         .arg(wait_then_open)
         .arg("sh")
         .args(env_args)
-        .arg(&staged.bundle)
+        .arg(bundle)
         .spawn()
         .context("start the new version")?;
     Ok(())
@@ -189,9 +218,17 @@ async fn fetch(url: &str, path: &Path) -> Result<String> {
         .context("couldn't reach the download")?
         .error_for_status()
         .context("couldn't download the update")?;
+    if response.content_length().is_some_and(|len| len > MAX_DOWNLOAD) {
+        bail!("the download is larger than an update can be");
+    }
     let mut file = std::fs::File::create(path).with_context(|| format!("create {}", path.display()))?;
     let mut hasher = Sha256::new();
+    let mut got: u64 = 0;
     while let Some(chunk) = response.chunk().await.context("the download stopped")? {
+        got += chunk.len() as u64;
+        if got > MAX_DOWNLOAD {
+            bail!("the download is larger than an update can be");
+        }
         hasher.update(&chunk);
         file.write_all(&chunk).context("save the download")?;
     }

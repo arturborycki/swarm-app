@@ -89,3 +89,12 @@ fn forwarded_port_answers_tells_a_waiting_server_from_a_closed_end() {
     assert!(!forwarded_port_answers(port));
     closer.join().unwrap();
 }
+
+#[test]
+fn only_an_older_daemon_counts_as_older() {
+    assert!(is_older("0.1.9", "0.1.13"));
+    assert!(is_older("0.1.13", "0.2.0"));
+    assert!(!is_older("0.1.13", "0.1.13"));
+    assert!(!is_older("0.1.14", "0.1.13"), "a newer daemon is left alone");
+    assert!(!is_older("1.0.0-beta", "0.9.9"));
+}

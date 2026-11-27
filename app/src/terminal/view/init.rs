@@ -618,6 +618,8 @@ pub fn init(app: &mut AppContext) {
             "Share selected block",
             TerminalAction::OpenShareModal,
         )
+        // swarm-term: sharing blocks is a Warp server feature.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_custom_action(CustomAction::CreateBlockPermalink)
         .with_context_predicate(
             id!("Terminal") & eq!("TerminalView_BlockSelectionCardinality", "One"),

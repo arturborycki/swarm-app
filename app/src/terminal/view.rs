@@ -845,10 +845,10 @@ impl NotificationsTrigger {
                 "Swarm can notify you when long-running commands finish."
             }
             NotificationsTrigger::AgentTaskCompleted(..) => {
-                "Warp can notify you when an agent finishes responding."
+                "Swarm can notify you when an agent finishes responding."
             }
             NotificationsTrigger::NeedsAttention => {
-                "Warp can notify you when a command or agent needs your attention."
+                "Swarm can notify you when a command or agent needs your attention."
             }
             NotificationsTrigger::PasswordPrompt => {
                 "Swarm can notify you when you're prompted to enter a password."
@@ -17939,20 +17939,23 @@ impl TerminalView {
                 }
 
                 items.push(MenuItem::Separator);
-                items.push(
-                    MenuItemFields::new(share_block_label)
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::OpenShareBlockModal {
-                                block_index: tail_block_index,
-                            },
-                        ))
-                        .with_key_shortcut_label(keybinding_name_to_display_string(
-                            "terminal:open_share_block_modal",
-                            ctx,
-                        ))
-                        .with_disabled(is_share_disabled)
-                        .into_item(),
-                );
+                // swarm-term: sharing blocks is a Warp server feature.
+                if !crate::swarm::HIDE_WARP_SERVICES {
+                    items.push(
+                        MenuItemFields::new(share_block_label)
+                            .with_on_select_action(TerminalAction::ContextMenu(
+                                ContextMenuAction::OpenShareBlockModal {
+                                    block_index: tail_block_index,
+                                },
+                            ))
+                            .with_key_shortcut_label(keybinding_name_to_display_string(
+                                "terminal:open_share_block_modal",
+                                ctx,
+                            ))
+                            .with_disabled(is_share_disabled)
+                            .into_item(),
+                    );
+                }
 
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
@@ -22355,6 +22358,9 @@ impl TerminalView {
         block_index: BlockIndex,
         ctx: &mut ViewContext<Self>,
     ) {
+        if crate::swarm::HIDE_WARP_SERVICES {
+            return;
+        }
         if AuthStateProvider::as_ref(ctx)
             .get()
             .is_anonymous_or_logged_out()

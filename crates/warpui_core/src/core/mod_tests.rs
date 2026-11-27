@@ -1756,8 +1756,11 @@ fn test_priority_bindings_win_over_inner_views() -> Result<()> {
         assert_eq!(outer.read(&app, |v, _| v.handled.clone()), ["outer ctrl-b c"]);
         assert!(inner.read(&app, |v, _| v.handled.is_empty()));
 
-        // A key that doesn't continue the sequence goes on as usual.
-        app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("ctrl-b")?, false)?;
+        // A key that doesn't continue the sequence is dropped, as in tmux; the key after it
+        // goes on as usual.
+        assert!(app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("ctrl-b")?, false)?);
+        assert!(app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("x")?, false)?);
+        assert!(inner.read(&app, |v, _| v.handled.is_empty()));
         app.dispatch_keystroke(window_id, &chain, &Keystroke::parse("x")?, false)?;
         assert_eq!(inner.read(&app, |v, _| v.handled.clone()), ["inner x"]);
 

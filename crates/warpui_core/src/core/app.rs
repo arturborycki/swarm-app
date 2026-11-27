@@ -2216,9 +2216,14 @@ impl AppContext {
                 ctx.set.insert("IMEOpen");
             }
         }
-        if self.priority_pending_chain.take().is_some_and(|chain| chain != responder_chain) {
-            self.priority_matcher.clear_pending();
-        }
+        let after_prefix = match self.priority_pending_chain.take() {
+            Some(chain) if chain != responder_chain => {
+                self.priority_matcher.clear_pending();
+                false
+            }
+            Some(_) => true,
+            None => false,
+        };
         for (i, ctx) in context_chain.iter().enumerate().rev() {
             match self.priority_matcher.push_keystroke(keystroke.clone(), responder_chain[i], ctx) {
                 MatchResult::None => {}
@@ -2233,6 +2238,12 @@ impl AppContext {
                     }
                 }
             }
+        }
+        // A key after a priority prefix that nothing is bound to is dropped, as
+        // tmux does, rather than typed into whatever has focus.
+        if after_prefix {
+            self.priority_matcher.clear_pending();
+            return Ok(true);
         }
         let mut pending = false;
         for (i, ctx) in context_chain.iter_mut().enumerate().rev() {

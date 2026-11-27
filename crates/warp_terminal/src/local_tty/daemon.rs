@@ -23,7 +23,7 @@ use anyhow::{bail, Context, Result};
 use instant::Instant;
 pub use swarm_client::swarm_proto::VERSION;
 use swarm_client::swarm_proto::{AttachMode, CreateOpts, SessionInfo, Size};
-use swarm_client::{Attachment, ReplyFilter, Client, StreamEvent};
+use swarm_client::{Attachment, ForgedTimeFilter, ReplyFilter, Client, StreamEvent};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 
@@ -83,6 +83,9 @@ pub fn is_reattached(warp_session_id: u64) -> bool {
 pub struct Daemons {
     rt: tokio::runtime::Runtime,
     clients: tokio::sync::Mutex<HashMap<Option<String>, Client>>,
+    /// Held while connecting to a host (the key), so tabs opening together
+    /// share one connection, and only tabs for that host wait.
+    connecting: Mutex<HashMap<Option<String>, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 static DAEMONS: LazyLock<Option<Daemons>> = LazyLock::new(|| {
@@ -92,7 +95,7 @@ static DAEMONS: LazyLock<Option<Daemons>> = LazyLock::new(|| {
         .enable_all()
         .build();
     match rt {
-        Ok(rt) => Some(Daemons { rt, clients: Default::default() }),
+        Ok(rt) => Some(Daemons { rt, clients: Default::default(), connecting: Default::default() }),
         Err(e) => {
             log::warn!("swarm: can't start the daemon client runtime: {e}");
             None
@@ -114,11 +117,22 @@ async fn connect(host: Option<&str>) -> Result<Client> {
     }
 }
 
+/// Whether daemon version `theirs` is older than `ours` (`0.1.9` < `0.1.13`).
+/// Only an older daemon is replaced: a newer one (installed by a newer copy
+/// of the app on another Mac, or by hand) stays, so two Macs on different
+/// builds don't take turns restarting a shared host's daemon.
+fn is_older(theirs: &str, ours: &str) -> bool {
+    let parse = |v: &str| -> Vec<u64> {
+        v.split(['-', '+']).next().unwrap_or("").split('.').map(|n| n.parse().unwrap_or(0)).collect()
+    };
+    parse(theirs) < parse(ours)
+}
+
 /// Hosts (`None`: this Mac) whose daemon this app has tried to bring up to
 /// its own build; tried once per run, so a failed update doesn't loop.
 static UPGRADE_TRIED: LazyLock<Mutex<std::collections::HashSet<Option<String>>>> = LazyLock::new(Default::default);
 
-/// Replaces `host`'s daemon, which runs another build than this app, with
+/// Replaces `host`'s daemon, which runs an older build than this app, with
 /// this app's: on a remote host the binaries are copied over first, then the
 /// daemon is restarted in place. Sessions keep running (their shims are
 /// untouched and re-adopted). If that can't be done, `old` stays in use.
@@ -187,18 +201,22 @@ impl Daemons {
     /// starting the local daemon, as needed.
     pub async fn client(&self, host: Option<&str>) -> Result<Client> {
         let key = host.map(str::to_string);
-        let mut clients = self.clients.lock().await;
-        if let Some(c) = clients.get(&key) {
+        // One connect at a time per host, and none of them holds up the
+        // others: a host that doesn't answer mustn't stall a local tab.
+        let gate = self.connecting.lock().unwrap().entry(key.clone()).or_default().clone();
+        let _connecting = gate.lock().await;
+        let cached = self.clients.lock().await.get(&key).cloned();
+        if let Some(c) = cached {
             if tokio::time::timeout(Duration::from_secs(5), c.ping()).await.is_ok_and(|r| r.is_ok()) {
-                return Ok(c.clone());
+                return Ok(c);
             }
-            clients.remove(&key);
+            self.clients.lock().await.remove(&key);
         }
         let mut c = connect(host).await?;
-        if c.daemon().version != VERSION && UPGRADE_TRIED.lock().unwrap().insert(key.clone()) {
+        if is_older(&c.daemon().version, VERSION) && UPGRADE_TRIED.lock().unwrap().insert(key.clone()) {
             c = upgrade_daemon(host, c).await?;
         }
-        clients.insert(key, c.clone());
+        self.clients.lock().await.insert(key, c.clone());
         Ok(c)
     }
 
@@ -387,14 +405,14 @@ pub fn watch_status(
     });
 }
 
-/// One connection's worth. `Ok(None)`: the daemon is another build.
+/// One connection's worth. `Ok(None)`: the daemon is an older build.
 async fn watch_status_once(
     daemons: &Daemons,
     host: Option<&str>,
     on_change: &impl Fn(Vec<(String, ProgramStatus)>) -> bool,
 ) -> Result<Option<bool>> {
     let client = daemons.client(host).await?;
-    if client.daemon().version != VERSION {
+    if is_older(&client.daemon().version, VERSION) {
         return Ok(None);
     }
     let mut changes = client.subscribe_status().await?;
@@ -420,7 +438,7 @@ pub fn clear_status(host: Option<String>, id: String) {
     daemons.rt.spawn(async move {
         let result = async {
             let client = daemons.client(host.as_deref()).await?;
-            if client.daemon().version != VERSION {
+            if is_older(&client.daemon().version, VERSION) {
                 return Ok(());
             }
             client.clear_status(&id).await
@@ -665,8 +683,14 @@ async fn run_bridge(
     let (mut rd, mut wr) = sock.into_split();
     let id = att.info.id.clone();
     let mut last_offset = att.replay_from;
+    // A session made by this tab replays only its first output, which the
+    // shell is waiting to have answered. After a dropped connection, what
+    // replays is old: its queries were answered long ago.
+    let mut guard_replay = guard_replay;
     let mut guard_until: Option<Instant> = None;
     let mut replies = ReplyFilter::default();
+    // A shim from before 0.1.14 doesn't rename a program's own SwarmTime.
+    let mut forged = ForgedTimeFilter::default();
     let mut eol_marks = swarm_client::EolMarkFilter::default();
     // Replayed hooks carry the time they were written; live output is "now".
     let mut timed = false;
@@ -682,7 +706,8 @@ async fn run_bridge(
                     // written for; zsh's partial-line marks would show there.
                     let mut out = if replay {
                         timed = true;
-                        let mut out = eol_marks.push(&data);
+                        let mut out = forged.finish();
+                        out.extend(eol_marks.push(&data));
                         if end >= att.live_from {
                             out.extend(eol_marks.finish());
                         }
@@ -692,7 +717,7 @@ async fn run_bridge(
                         if std::mem::take(&mut timed) {
                             out.extend_from_slice(OUTPUT_TIME_NOW);
                         }
-                        out.extend_from_slice(&data);
+                        out.extend(forged.push(&data));
                         out
                     };
                     if replay && end >= att.live_from {
@@ -735,7 +760,8 @@ async fn run_bridge(
                 Some(StreamEvent::Closed { reason }) => {
                     log::info!("swarm: session {id} stream closed: {reason}");
                     // Resuming starts after what was received, held back or not.
-                    let held = eol_marks.finish();
+                    let mut held = eol_marks.finish();
+                    held.extend(forged.finish());
                     if !held.is_empty() && wr.write_all(&held).await.is_err() {
                         break;
                     }
@@ -745,6 +771,7 @@ async fn run_bridge(
                         Some((c, a)) => {
                             client = c;
                             att = a;
+                            guard_replay = true;
                         }
                         None => break,
                     }
@@ -1186,13 +1213,13 @@ static PORTS: LazyLock<Mutex<HashMap<Option<String>, HostPorts>>> = LazyLock::ne
 
 /// Asks the daemon on each of `hosts` which ports programs in its sessions
 /// listen on, such as a development server, and keeps the answers for
-/// [`detected_ports`]. True when anything changed. A daemon from another build
+/// [`detected_ports`]. True when anything changed. A daemon from an older build
 /// isn't asked: an older one would drop the connection on the request.
 pub async fn refresh_ports(daemons: &'static Daemons, hosts: Vec<Option<String>>) -> bool {
     let asks = hosts.into_iter().map(|host| async move {
         let found = async {
             let client = daemons.client(host.as_deref()).await?;
-            if client.daemon().version != VERSION {
+            if is_older(&client.daemon().version, VERSION) {
                 return Ok(Vec::new());
             }
             tokio::time::timeout(Duration::from_secs(5), client.ports()).await?
@@ -1218,7 +1245,7 @@ pub async fn refresh_ports(daemons: &'static Daemons, hosts: Vec<Option<String>>
 
 /// Lines with `text` in the output of sessions on each of `hosts` (`None`:
 /// this Mac), searched by each host's daemon, and what wasn't searched, as
-/// words for the user. A host whose daemon is from another build is left out:
+/// words for the user. A host whose daemon is from an older build is left out:
 /// an older one would drop the connection.
 pub async fn search_sessions(
     daemons: &'static Daemons,
@@ -1232,8 +1259,8 @@ pub async fn search_sessions(
             // Connecting is within the time limit too: a host may not answer.
             let searched = tokio::time::timeout(Duration::from_secs(30), async {
                 let client = daemons.client(host.as_deref()).await?;
-                if client.daemon().version != VERSION {
-                    anyhow::bail!("runs another version of Swarm");
+                if is_older(&client.daemon().version, VERSION) {
+                    anyhow::bail!("runs an older version of Swarm");
                 }
                 client.search(opts).await
             })

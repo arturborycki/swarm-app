@@ -790,6 +790,11 @@ pub fn run() -> Result<()> {
         warp_cli::local_control::run_and_exit(args);
     }
 
+    // swarm-term: no Warp account commands.
+    if crate::swarm::SWARM_CHROME {
+        crate::swarm::handle_command_line();
+    }
+
     // Parse command-line arguments.
     let args = warp_cli::Args::from_env();
 
@@ -1977,6 +1982,13 @@ pub(crate) fn initialize_app(
     // Rewrite recognized Warp web URLs (sessions, Drive, settings, home) into local
     // intent URLs when possible so they open directly in the desktop app.
     ctx.set_before_open_url(|url_str, _ctx| {
+        // swarm-term: Warp's help pages describe Warp; Swarm's docs are its own.
+        if crate::swarm::HIDE_WARP_SERVICES
+            && let Ok(url) = Url::parse(url_str)
+            && url.host_str() == Some("docs.warp.dev")
+        {
+            return "https://swarm-term.com/docs/".to_string();
+        }
         if let Ok(url) = Url::parse(url_str)
             && let Some(intent) = maybe_rewrite_web_url_to_intent(&url)
         {

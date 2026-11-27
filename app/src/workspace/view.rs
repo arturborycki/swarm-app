@@ -4176,7 +4176,6 @@ impl Workspace {
             self.reopen_remote_tabs(ctx);
             #[cfg(target_os = "macos")]
             std::thread::spawn(crate::swarm::install::remove_leftovers);
-            self.schedule_swarm_update_check(std::time::Duration::from_secs(10), ctx);
             if crate::swarm::claim_first_run() {
                 // Once the window is up.
                 let _ = ctx.spawn(
@@ -4184,6 +4183,12 @@ impl Workspace {
                     |me, _, ctx| me.show_swarm_first_run(ctx),
                 );
             }
+        }
+        // Each window keeps the daily update check going, so it doesn't stop
+        // when the first window closes; it runs once a day whatever the count.
+        #[cfg(unix)]
+        if crate::swarm::use_daemon_sessions() {
+            self.schedule_swarm_update_check(std::time::Duration::from_secs(10), ctx);
         }
         match workspace_setting {
             NewWorkspaceSource::Reattach { tabs } => {
@@ -4507,6 +4512,9 @@ impl Workspace {
                     ToolPanelView::ProjectExplorer
                 }
                 LeftPanelDisplayedTab::WarpDrive => ToolPanelView::WarpDrive,
+                LeftPanelDisplayedTab::ConversationListView if crate::swarm::HIDE_WARP_SERVICES => {
+                    ToolPanelView::ProjectExplorer
+                }
                 LeftPanelDisplayedTab::ConversationListView => ToolPanelView::ConversationListView,
             };
             lp.restore_active_view_from_snapshot(active_view, ctx);
@@ -6939,6 +6947,13 @@ impl Workspace {
     /// Runs `cd` in the session behind `warp_session_id`, or, while a program runs there, opens a
     /// new session in `path` on the same host.
     fn swarm_cd_to(&mut self, warp_session_id: u64, host: Option<String>, path: String, ctx: &mut ViewContext<Self>) {
+        // The folder comes from a program's output (OSC 7, history): one with
+        // a newline or other control character would run more than `cd`.
+        #[cfg(unix)]
+        if path.chars().any(warp_terminal::local_tty::daemon::is_unsafe_char) {
+            self.swarm_alert("Can't go to that folder", "Its name has control characters in it.", ctx);
+            return;
+        }
         let view = self.tabs.iter().find_map(|tab| {
             tab.pane_group
                 .as_ref(ctx)
@@ -7440,13 +7455,16 @@ impl Workspace {
         });
     }
 
-    /// Checks for updates shortly after launch, then once a day.
+    /// Checks for updates shortly after launch, then once a day (asking every
+    /// hour whether a day has passed: [`updates::claim_daily_check`]).
     #[cfg(unix)]
     fn schedule_swarm_update_check(&mut self, delay: std::time::Duration, ctx: &mut ViewContext<Self>) {
-        const DAILY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+        const HOURLY: std::time::Duration = std::time::Duration::from_secs(60 * 60);
         let _ = ctx.spawn(async move { warpui::r#async::Timer::after(delay).await }, |me, _, ctx| {
-            me.check_for_swarm_updates(true, ctx);
-            me.schedule_swarm_update_check(DAILY, ctx);
+            if crate::swarm::updates::claim_daily_check() {
+                me.check_for_swarm_updates(true, ctx);
+            }
+            me.schedule_swarm_update_check(HOURLY, ctx);
         });
     }
 
@@ -26227,7 +26245,9 @@ impl Workspace {
         if cfg!(feature = "local_fs") && *CodeSettings::as_ref(ctx).show_project_explorer.value() {
             views.push(ToolPanelView::ProjectExplorer);
         }
-        if FeatureFlag::AgentViewConversationListView.is_enabled()
+        // swarm-term: Warp's agent conversations need a Warp account.
+        if !crate::swarm::HIDE_WARP_SERVICES
+            && FeatureFlag::AgentViewConversationListView.is_enabled()
             && *AISettings::as_ref(ctx).show_conversation_history
         {
             views.push(ToolPanelView::ConversationListView);
@@ -28831,7 +28851,7 @@ impl TypedActionView for Workspace {
                 }
             }
             ToggleConversationListView => {
-                if FeatureFlag::AgentViewConversationListView.is_enabled() {
+                if !crate::swarm::HIDE_WARP_SERVICES && FeatureFlag::AgentViewConversationListView.is_enabled() {
                     let is_showing = self.left_panel_view.as_ref(ctx).active_view()
                         == ToolPanelView::ConversationListView;
                     self.toggle_left_panel_view(

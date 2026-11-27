@@ -453,3 +453,38 @@ mod tests {
         assert_eq!(remote_home_relative("/srv/web"), "/srv/web");
     }
 }
+
+/// Warp's command-line commands (Oz agents, `login`, cloud runs) need a Warp
+/// account, which Swarm doesn't have. Help and version say what this binary
+/// is; those commands are refused. Internal, hidden commands the app runs
+/// itself go on to Warp's parser.
+pub fn handle_command_line() {
+    const WARP_COMMANDS: &[&str] = &[
+        "agent", "environment", "e", "mcp", "run", "task", "model", "memory-store", "memory-stores", "memory",
+        "login", "logout", "whoami", "provider", "integration", "i", "schedule", "secret", "federate", "artifact",
+        "api-key", "runner", "completions", "dump-settings-schema",
+    ];
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(first) = args.first() else { return };
+    let version = env!("CARGO_PKG_VERSION");
+    match first.as_str() {
+        "-h" | "--help" | "help" => {
+            println!(
+                "Swarm {version}: a terminal whose sessions keep running, here and over SSH.\n\n\
+                 Usage: open -a Swarm\n\n\
+                 Manage sessions from a shell with swarmctl (swarmctl --help), which is in\n\
+                 Swarm.app/Contents/MacOS. Documentation: https://swarm-term.com/docs/"
+            );
+            std::process::exit(0);
+        }
+        "-V" | "--version" => {
+            println!("Swarm {version}");
+            std::process::exit(0);
+        }
+        cmd if WARP_COMMANDS.contains(&cmd) => {
+            eprintln!("swarm: '{cmd}' isn't a Swarm command. To manage sessions, use swarmctl (swarmctl --help).");
+            std::process::exit(2);
+        }
+        _ => {}
+    }
+}

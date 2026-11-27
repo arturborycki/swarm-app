@@ -3057,6 +3057,11 @@ struct CustomAppIconWidget {
 impl SettingsWidget for CustomAppIconWidget {
     type View = AppearanceSettingsPageView;
 
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
+
     fn search_terms(&self) -> &str {
         "customize custom app icon icons dock cmd tab app switcher"
     }
@@ -3677,6 +3682,11 @@ struct ToolsPanelConversationHistoryWidget {
 impl SettingsWidget for ToolsPanelConversationHistoryWidget {
     type View = AppearanceSettingsPageView;
 
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
+
     fn search_terms(&self) -> &str {
         "tools panel tabs conversation history agent conversations left panel visibility"
     }
@@ -3755,6 +3765,11 @@ struct ToolsPanelWarpDriveWidget {
 
 impl SettingsWidget for ToolsPanelWarpDriveWidget {
     type View = AppearanceSettingsPageView;
+
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
 
     fn search_terms(&self) -> &str {
         "tools panel tabs warp drive left panel visibility"
