@@ -9627,6 +9627,19 @@ impl TerminalView {
         }
     }
 
+    /// swarm-term: the command running now, or else the last one run, for
+    /// running it again after a reboot.
+    pub fn swarm_recent_command(&self) -> Option<String> {
+        let model = self.model.lock();
+        model
+            .block_list()
+            .blocks()
+            .iter()
+            .rev()
+            .map(|block| block.command_to_string().trim().to_string())
+            .find(|command| !command.is_empty())
+    }
+
     pub fn is_long_running(&self) -> bool {
         let model = self.model.lock();
         model

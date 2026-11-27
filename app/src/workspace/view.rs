@@ -45,6 +45,8 @@ async fn run_swarmctl_agents(swarmctl: &std::path::Path, host: Option<&str>, sub
 #[cfg(test)]
 #[path = "view_tests.rs"]
 pub(crate) mod tests;
+#[cfg(unix)]
+mod swarm_tools;
 mod vertical_tabs;
 #[cfg(target_family = "wasm")]
 mod wasm_view;
@@ -2794,7 +2796,16 @@ impl Workspace {
                 return;
             }
             if let crate::swarm::sessions::SwarmSessionsEvent::Attention { title, body } = event {
-                me.notify_swarm_attention(title.clone(), body.clone(), ctx);
+                me.notify_swarm_attention(title.clone(), body.clone(), None, ctx);
+            }
+            if let crate::swarm::sessions::SwarmSessionsEvent::OpenLayout { host, sessions } = event {
+                let front = ctx.windows().active_window().or_else(|| ctx.windows().frontmost_window_id());
+                if front.is_none_or(|w| w == ctx.window_id()) {
+                    let tabs: Vec<_> =
+                        sessions.iter().map(|s| crate::swarm::ReattachTab::for_session(host.as_deref(), s)).collect();
+                    me.add_swarm_tabs(&tabs, ctx);
+                }
+                return;
             }
             if let crate::swarm::sessions::SwarmSessionsEvent::Program { daemon_id, warp_session_id, title, body } = event {
                 me.on_swarm_program(daemon_id, *warp_session_id, title.clone(), body.clone(), ctx);
@@ -4195,9 +4206,7 @@ impl Workspace {
                 if tabs.is_empty() {
                     self.configure_empty_workspace(None, None, ctx);
                 } else {
-                    for tab in &tabs {
-                        self.add_swarm_tab(tab, ctx);
-                    }
+                    self.add_swarm_tabs(&tabs, ctx);
                     self.activate_tab_internal(0, ctx);
                 }
             }
@@ -6572,16 +6581,42 @@ impl Workspace {
                         model.watch_host(host.clone(), ctx)
                     });
                     let active = me.active_tab_index;
-                    for session in &sessions {
-                        let tab = crate::swarm::ReattachTab::for_session(Some(&host), session);
-                        me.add_swarm_tab(&tab, ctx);
-                    }
+                    let tabs: Vec<_> =
+                        sessions.iter().map(|s| crate::swarm::ReattachTab::for_session(Some(&host), s)).collect();
+                    me.add_swarm_tabs(&tabs, ctx);
                     me.activate_tab_internal(active, ctx);
                 }
                 Ok(Ok(_)) => {}
                 Ok(Err(e)) => log::info!("swarm: not reopening sessions on {host}: {e:#}"),
                 Err(_) => {}
             });
+        }
+    }
+
+    /// Opens sessions as tabs. Sessions of one layout tab (`swarmctl up`)
+    /// open as one tab, each pane split beside the last.
+    fn add_swarm_tabs(&mut self, tabs: &[crate::swarm::ReattachTab], ctx: &mut ViewContext<Self>) {
+        // The pane group of each layout tab opened so far: tab indexes move
+        // as tabs join their groups.
+        let mut placed: HashMap<String, EntityId> = HashMap::new();
+        for tab in tabs {
+            let first = tab.layout.as_ref().filter(|slot| slot.pane > 0).and_then(|slot| {
+                let group = placed.get(&slot.tab)?;
+                self.tabs.iter().position(|t| t.pane_group.id() == *group)
+            });
+            self.add_swarm_tab(tab, ctx);
+            match (first, &tab.layout) {
+                (Some(first), Some(slot)) => {
+                    let source = self.active_tab_index;
+                    self.activate_tab_internal(first, ctx);
+                    let direction = if slot.split_down { pane_group::Direction::Down } else { pane_group::Direction::Right };
+                    self.swarm_split_with_tab(source, direction, None, ctx);
+                }
+                (None, Some(slot)) => {
+                    placed.insert(slot.tab.clone(), self.tabs[self.active_tab_index].pane_group.id());
+                }
+                _ => {}
+            }
         }
     }
 
@@ -6667,7 +6702,7 @@ impl Workspace {
     /// front window only (so several windows don't repeat it), when the user
     /// has notifications on.
     #[cfg(unix)]
-    fn notify_swarm_attention(&mut self, title: String, body: String, ctx: &mut ViewContext<Self>) {
+    fn notify_swarm_attention(&mut self, title: String, body: String, data: Option<String>, ctx: &mut ViewContext<Self>) {
         let settings = SessionSettings::as_ref(ctx).notifications.value().clone();
         // Sessions needing the user is what Swarm's notifications are for, so
         // they're on until the user turns them off: the first one turns them
@@ -6680,7 +6715,7 @@ impl Workspace {
         if front.is_some_and(|w| w != ctx.window_id()) {
             return;
         }
-        let notification = UserNotification::new_with_sound(title, body, None, settings.play_notification_sound);
+        let notification = UserNotification::new_with_sound(title, body, data, settings.play_notification_sound);
         if settings.mode == NotificationsMode::Enabled {
             ctx.send_desktop_notification(notification, |_, _, _| {});
             return;
@@ -6698,7 +6733,7 @@ impl Workspace {
     }
 
     #[cfg(not(unix))]
-    fn notify_swarm_attention(&mut self, _title: String, _body: String, _ctx: &mut ViewContext<Self>) {}
+    fn notify_swarm_attention(&mut self, _title: String, _body: String, _data: Option<String>, _ctx: &mut ViewContext<Self>) {}
 
     /// Shows sessions' daemon names (renamed elsewhere, e.g. `swarmctl rename`)
     /// as their tabs' titles.
@@ -6767,7 +6802,17 @@ impl Workspace {
             crate::swarm::sessions::SwarmSessions::as_ref(ctx).mark_program_seen(daemon_id);
             return;
         }
-        self.notify_swarm_attention(title, body, ctx);
+        let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+        let data = sessions.host_of(daemon_id).map(|host| {
+            let permission = sessions.awaiting_permission(&host, daemon_id);
+            let context = crate::notification::NotificationContext::SwarmSession {
+                host,
+                session_id: daemon_id.to_string(),
+                permission,
+            };
+            serde_json::to_string(&context).unwrap_or_default()
+        });
+        self.notify_swarm_attention(title, body, data, ctx);
     }
 
     #[cfg(not(unix))]
@@ -27744,6 +27789,32 @@ impl TypedActionView for Workspace {
                         warp_terminal::local_tty::daemon::mute_sessions(ids, !all_muted);
                     }
                 }
+            }
+            SwarmToggleRestart => {
+                #[cfg(unix)]
+                self.swarm_toggle_restart(ctx);
+            }
+            SwarmExportOutput => {
+                #[cfg(unix)]
+                self.swarm_export_output(ctx);
+            }
+            SwarmToggleRecording => {
+                #[cfg(unix)]
+                self.swarm_toggle_recording(ctx);
+            }
+            SwarmChooseLayout => {
+                #[cfg(unix)]
+                self.swarm_choose_layout(ctx);
+            }
+            SwarmStartLayout(name) => {
+                #[cfg(unix)]
+                self.swarm_start_layout(name.clone(), ctx);
+                #[cfg(not(unix))]
+                let _ = name;
+            }
+            SwarmSaveLayout => {
+                #[cfg(unix)]
+                self.swarm_save_layout(ctx);
             }
             SwarmMarkUnread => {
                 #[cfg(unix)]

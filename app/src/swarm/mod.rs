@@ -113,6 +113,21 @@ pub const SKIP_WARP_ONBOARDING: bool = true;
 pub const DISABLED_WARP_FEATURES: &[crate::features::FeatureFlag] =
     &[crate::features::FeatureFlag::CreatingSharedSessions];
 
+#[cfg(unix)]
+impl LayoutSlot {
+    fn of(session: &warp_terminal::local_tty::daemon::DaemonSession) -> Option<Self> {
+        use warp_terminal::local_tty::daemon::{META_LAYOUT, META_LAYOUT_PANE, META_LAYOUT_SPLIT, META_LAYOUT_TAB};
+        let layout = session.ui.get(META_LAYOUT)?;
+        let tab = session.ui.get(META_LAYOUT_TAB)?;
+        let run = session.ui.get(warp_terminal::local_tty::daemon::META_LAYOUT_RUN).cloned().unwrap_or_default();
+        Some(LayoutSlot {
+            tab: format!("{layout}\u{0}{run}\u{0}{tab}"),
+            pane: session.ui.get(META_LAYOUT_PANE).and_then(|p| p.parse().ok()).unwrap_or(0),
+            split_down: session.ui.get(META_LAYOUT_SPLIT).map(String::as_str) == Some("down"),
+        })
+    }
+}
+
 /// A running daemon session to open as a tab at launch.
 #[derive(Debug, Clone)]
 pub struct ReattachTab {
@@ -127,6 +142,21 @@ pub struct ReattachTab {
     pub host: Option<String>,
     /// The tab group to put the tab in (`META_GROUP`).
     pub group: Option<String>,
+    /// Watch only: no typing, no resizing, and nothing about the session changes.
+    pub readonly: bool,
+    /// Where a layout (`swarmctl up`) puts the session.
+    pub layout: Option<LayoutSlot>,
+}
+
+/// A session's place in a layout: sessions with the same `tab` open as one
+/// tab, `pane` 0 first and each next one split beside the last.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutSlot {
+    /// The layout and tab, plus the `swarmctl up` run (sessions of two runs
+    /// of the same layout are different tabs).
+    pub tab: String,
+    pub pane: usize,
+    pub split_down: bool,
 }
 
 #[cfg(unix)]
@@ -151,6 +181,22 @@ impl ReattachTab {
             name: session.name.clone(),
             host: host.map(str::to_string),
             group: session.ui.get(warp_terminal::local_tty::daemon::META_GROUP).filter(|g| !g.is_empty()).cloned(),
+            readonly: false,
+            layout: LayoutSlot::of(session),
+        }
+    }
+
+    /// A tab that watches `session` without typing into it. It shows the
+    /// raw output (no Warp blocks: setting those up means typing).
+    pub fn watching(host: Option<&str>, session: &warp_terminal::local_tty::daemon::DaemonSession) -> Self {
+        let name = session.name.clone().unwrap_or_else(|| session.title.clone());
+        ReattachTab {
+            warp_session_id: None,
+            warpify_shell: None,
+            name: Some(format!("{} (watching)", warp_terminal::local_tty::daemon::clean_text(&name))),
+            readonly: true,
+            layout: None,
+            ..ReattachTab::for_session(host, session)
         }
     }
 
@@ -434,6 +480,9 @@ pub fn reattach_terminal_options(tab: &ReattachTab) -> crate::pane_group::NewTer
         if let Some(host) = &tab.host {
             options.env_vars.insert(warp_terminal::local_tty::daemon::REATTACH_HOST_ENV.into(), host.clone().into());
         }
+        if tab.readonly {
+            options.env_vars.insert(warp_terminal::local_tty::daemon::REATTACH_READONLY_ENV.into(), "1".into());
+        }
     }
     options
 }
@@ -452,6 +501,34 @@ mod tests {
         assert_eq!(remote_home_relative("/home/"), "/home/");
         assert_eq!(remote_home_relative("/srv/web"), "/srv/web");
     }
+}
+
+/// `text` for a menu item: one line of at most 80 characters, without control
+/// characters (it comes from a program's output or a host).
+pub fn menu_text(text: &str) -> String {
+    let line: String = text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect();
+    let line = line.trim();
+    if line.chars().count() > 80 {
+        format!("{}…", line.chars().take(79).collect::<String>())
+    } else {
+        line.to_string()
+    }
+}
+
+/// The layouts in `~/.config/swarm/layouts`, by name (`swarmctl up <name>`).
+#[cfg(unix)]
+pub fn layout_names() -> Vec<String> {
+    let Some(home) = std::env::var_os("HOME") else { return Vec::new() };
+    let dir = std::path::PathBuf::from(home).join(".config/swarm/layouts");
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| e.file_name().to_str()?.strip_suffix(".toml").map(str::to_string))
+        .filter(|n| !n.starts_with('.') && !n.chars().any(warp_terminal::local_tty::daemon::is_unsafe_char))
+        .collect();
+    names.sort();
+    names
 }
 
 /// Warp's command-line commands (Oz agents, `login`, cloud runs) need a Warp

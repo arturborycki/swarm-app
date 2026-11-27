@@ -8,6 +8,13 @@ void requestNotificationPermissions(void* callback);
 void warp_on_request_notification_permissions_completed(NSUInteger outcome_type, id outcome_msg,
                                                         void* callback);
 
+// The notification categories the app registers: Warp's plain one, and
+// swarm-term's for a program waiting for permission ("Allow Once", "Open").
+NSSet* warpNotificationCategories(void);
+
+// swarm-term: the action identifier of the "Allow Once" button.
+extern NSString* const WarpSwarmAllowAction;
+
 // Sends a desktop notification.
 void sendNotification(id, id, id, void*, BOOL);
 

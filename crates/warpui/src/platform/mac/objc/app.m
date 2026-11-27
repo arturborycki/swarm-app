@@ -8,6 +8,7 @@
 #import "host_view.h"
 #import "hotkey.h"
 #import "menus.h"
+#import "notifications/notifications.h"
 
 #import "reachability.h"
 
@@ -176,15 +177,8 @@ NSUInteger activeScreenId() {
             [UNUserNotificationCenter currentNotificationCenter];
         user_notification_center.delegate = self;
 
-        // Create and register the notification category.
-        UNNotificationCategory *CustomizedNotification = [UNNotificationCategory
-            categoryWithIdentifier:@"CUSTOMIZED_NOTIFICATION"
-                           actions:@[]
-                 intentIdentifiers:@[]
-                           options:UNNotificationCategoryOptionCustomDismissAction];
-
-        [user_notification_center
-            setNotificationCategories:[NSSet setWithObjects:CustomizedNotification, nil]];
+        // Register the notification categories.
+        [user_notification_center setNotificationCategories:warpNotificationCategories()];
     }
 
     // Initiate the global hotkey handlers first so we could register them at the rust
@@ -492,17 +486,21 @@ static BOOL isSystemInitiatedTermination(void) {
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center
     didReceiveNotificationResponse:(UNNotificationResponse *)response
              withCompletionHandler:(void (^)(void))completionHandler {
-    // Handle what happens when the user clicks the notification. Warp doesn't support any actions
-    // other than the default action currently.
-    if ([response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
-        NSDictionary *userInfo = response.notification.request.content.userInfo;
-        NSString *data = userInfo[@"DATA"];
-
-        if (rustWrapper) {
-            warp_app_notification_clicked(self, response.notification.date.timeIntervalSince1970,
-                                          data);
-        }
+    // Handle what happens when the user clicks the notification, or one of its buttons.
+    NSDictionary *userInfo = response.notification.request.content.userInfo;
+    NSString *data = userInfo[@"DATA"];
+    NSString *action = response.actionIdentifier;
+    BOOL clicked = [action isEqualToString:UNNotificationDefaultActionIdentifier] ||
+                   [action isEqualToString:@"SWARM_OPEN"];
+    BOOL allowed = [action isEqualToString:WarpSwarmAllowAction] && data != nil;
+    if (allowed) {
+        // swarm-term: "Allow Once" reaches Rust as the data with a prefix.
+        data = [@"allow:" stringByAppendingString:data];
     }
+    if ((clicked || allowed) && rustWrapper) {
+        warp_app_notification_clicked(self, response.notification.date.timeIntervalSince1970, data);
+    }
+    completionHandler();
 }
 
 @end

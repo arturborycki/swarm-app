@@ -249,6 +249,16 @@ impl SyncDataSource for DataSource {
                     ));
                 }
                 for session in sessions.sessions_on(host.as_deref()) {
+                    // Watching works whoever else has it open (another
+                    // window, another Mac): read-only, it changes nothing.
+                    if session.is_running() {
+                        let name = session.name.clone().unwrap_or_else(|| session.title.clone());
+                        items.push((
+                            format!("Watch {name} (read-only)"),
+                            format!("{place} · {}", session.cwd.as_deref().unwrap_or("~")),
+                            WorkspaceAction::SwarmReattach(crate::swarm::ReattachTab::watching(host.as_deref(), session)),
+                        ));
+                    }
                     if !session.is_running() || !session.clients.is_empty() {
                         continue;
                     }
@@ -258,6 +268,16 @@ impl SyncDataSource for DataSource {
                     let label = format!("Reattach {name}");
                     let detail = format!("{place} · {} · {what}", session.cwd.as_deref().unwrap_or("~"));
                     items.push((label, detail, WorkspaceAction::SwarmReattach(tab)));
+                }
+                // Layouts to start (`swarmctl up`), listed once, with this Mac.
+                if host.is_none() {
+                    for name in crate::swarm::layout_names() {
+                        items.push((
+                            format!("Start layout {name}"),
+                            "~/.config/swarm/layouts".to_string(),
+                            WorkspaceAction::SwarmStartLayout(name),
+                        ));
+                    }
                 }
                 items.push((
                     format!("New session on {place}"),

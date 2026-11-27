@@ -49,6 +49,17 @@ pub const META_GROUP: &str = "group";
 /// "1" when the user muted the session: its program's news sends no
 /// notification and doesn't count in the Dock badge.
 pub const META_MUTED: &str = "muted";
+/// A command to run again when the session is recreated after a reboot.
+pub const META_RESTART: &str = swarm_client::swarm_proto::META_RESTART;
+/// Set by `swarmctl up` (layouts): the layout's name, the session's tab and
+/// pane in it, how the pane is split ("right" or "down"), and, until a
+/// window has opened them, the `swarmctl up` run that started them.
+pub const META_LAYOUT: &str = "layout";
+pub const META_LAYOUT_TAB: &str = "layout.tab";
+pub const META_LAYOUT_PANE: &str = "layout.pane";
+pub const META_LAYOUT_SPLIT: &str = "layout.split";
+pub const META_LAYOUT_RUN: &str = "layout.run";
+pub const META_LAYOUT_OPEN: &str = "layout.open";
 
 /// Warp session ids of shells this app re-attached to. Their shell setup
 /// already ran, so a replayed `InitShell` hook must not run it again.
@@ -288,6 +299,8 @@ pub const REATTACH_WARP_ID_ENV: &str = "SWARM_REATTACH_WARP_SESSION_ID";
 pub const REATTACH_WARPIFY_SHELL_ENV: &str = "SWARM_REATTACH_WARPIFY_SHELL";
 /// The ssh host alias of a remote session; absent for the local daemon.
 pub const REATTACH_HOST_ENV: &str = "SWARM_REATTACH_HOST";
+/// Set to watch the session without typing into or resizing it.
+pub const REATTACH_READONLY_ENV: &str = "SWARM_REATTACH_READONLY";
 
 /// What a tab re-attaching to a daemon session needs to do.
 #[derive(Debug, Clone)]
@@ -373,7 +386,7 @@ async fn watch_once(
 }
 
 pub use swarm_client::swarm_proto::{
-    clean_text, is_unsafe_char, BlockedKind, ProgramStatus, SearchHit, SessionHits, StatusRecord, StatusState,
+    check_restart_command, clean_text, is_unsafe_char, BlockedKind, ProgramStatus, SearchHit, SessionHits, StatusRecord, StatusState,
 };
 
 /// Calls `on_change` with what the programs in `host`'s sessions report about
@@ -482,6 +495,33 @@ pub fn mute_sessions(warp_session_ids: Vec<u64>, muted: bool) {
     update_sessions(warp_session_ids, swarm_client::swarm_proto::MetaUpdate { name: None, ui });
 }
 
+/// Types `data` into daemon session `id` on `host`, in the background.
+pub fn write_to_session(host: Option<String>, id: String, data: Vec<u8>) {
+    let Some(daemons) = daemons() else { return };
+    daemons.rt.spawn(async move {
+        let result = async { daemons.client(host.as_deref()).await?.write(&id, data).await }.await;
+        if let Err(e) = result {
+            log::warn!("swarm: couldn't type into session {id} on {host:?}: {e:#}");
+        }
+    });
+}
+
+/// Sets UI metadata keys (an empty value removes one) on daemon session
+/// `id` on `host`, in the background.
+pub fn set_session_meta(host: Option<String>, id: String, ui: BTreeMap<String, String>) {
+    let Some(daemons) = daemons() else { return };
+    daemons.rt.spawn(async move {
+        let result = async {
+            let client = daemons.client(host.as_deref()).await?;
+            client.set_meta(&id, swarm_client::swarm_proto::MetaUpdate { name: None, ui }).await
+        }
+        .await;
+        if let Err(e) = result {
+            log::warn!("swarm: couldn't update session {id} on {host:?}: {e:#}");
+        }
+    });
+}
+
 fn update_sessions(warp_session_ids: Vec<u64>, update: swarm_client::swarm_proto::MetaUpdate) {
     let Some(daemons) = daemons() else { return };
     if warp_session_ids.is_empty() {
@@ -565,11 +605,16 @@ impl DaemonSpawner {
         let warp_id = env_vars.remove(std::ffi::OsStr::new(REATTACH_WARP_ID_ENV));
         let warpify = env_vars.remove(std::ffi::OsStr::new(REATTACH_WARPIFY_SHELL_ENV));
         let host = env_vars.remove(std::ffi::OsStr::new(REATTACH_HOST_ENV)).map(|h| h.to_string_lossy().into_owned());
+        let readonly = env_vars.remove(std::ffi::OsStr::new(REATTACH_READONLY_ENV)).is_some();
         if let Some(id) = reattach {
             let id = id.to_string_lossy().into_owned();
             let (client, info, att) = self.daemons.block_on(async {
                 let client = self.daemons.client(host.as_deref()).await?;
-                let att = client.attach(&id, AttachMode::Full, Some(to_size(&size)), false).await?;
+                let att = client.attach(&id, AttachMode::Full, Some(to_size(&size)), readonly).await?;
+                // Watching changes nothing about the session.
+                if readonly {
+                    return anyhow::Ok((client, att.info.clone(), att));
+                }
                 // Open as a tab again: reopen it at the next launch too.
                 let mut ui = BTreeMap::new();
                 ui.insert(META_AUTO_ATTACH.to_string(), "true".to_string());
@@ -584,7 +629,7 @@ impl DaemonSpawner {
                 let info = client.set_meta(&id, update).await.unwrap_or_else(|_| att.info.clone());
                 anyhow::Ok((client, info, att))
             })?;
-            log::info!("swarm: re-attached to daemon session {id} on {host:?} (pid {})", info.pid);
+            log::info!("swarm: re-attached to daemon session {id} on {host:?} (pid {}, read-only: {readonly})", info.pid);
             return self.bridge(host, client, info, att, true);
         }
 

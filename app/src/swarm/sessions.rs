@@ -29,6 +29,8 @@ pub struct SwarmSessions {
     /// the app started isn't news.
     status_loaded: BTreeSet<Host>,
     status_tx: async_channel::Sender<(Host, Vec<(String, daemon::ProgramStatus)>)>,
+    /// `swarmctl up` runs (host, token) already seen, so each opens once.
+    layouts_seen: BTreeSet<(Host, String)>,
 }
 
 /// A session's state as tabs and the sidebar show it: each has its own shape
@@ -196,6 +198,9 @@ pub enum SwarmSessionsEvent {
     /// notification: the window showing it marks it seen; otherwise the user
     /// is told (title, body).
     Program { daemon_id: String, warp_session_id: Option<u64>, title: String, body: String },
+    /// `swarmctl up` started these sessions (a layout): the front window
+    /// opens them as tabs, in layout order.
+    OpenLayout { host: Host, sessions: Vec<DaemonSession> },
 }
 
 impl SwarmSessions {
@@ -233,6 +238,7 @@ impl SwarmSessions {
             statuses: BTreeMap::new(),
             status_loaded: BTreeSet::new(),
             status_tx,
+            layouts_seen: BTreeSet::new(),
         };
         if super::use_daemon_sessions() {
             me.start_watching(None);
@@ -390,12 +396,43 @@ impl SwarmSessions {
         self.attention.retain(|(h, id), _| {
             *h != host || sessions.iter().any(|s| &s.id == id && (!s.is_running() || s.clients.is_empty()))
         });
+        // Sessions a layout just started: opened together once they're all
+        // there (`swarmctl up` makes them one after another).
+        for token in sessions.iter().filter_map(|s| s.ui.get(daemon::META_LAYOUT_OPEN)) {
+            if self.layouts_seen.insert((host.clone(), token.clone())) {
+                let (host, token) = (host.clone(), token.clone());
+                let _ = ctx.spawn(
+                    async { warpui::r#async::Timer::after(std::time::Duration::from_millis(1500)).await },
+                    move |me, _, ctx| me.open_layout(host, token, ctx),
+                );
+            }
+        }
         self.by_host.insert(host, sessions);
         for (title, body) in news {
             announce(format!("{title}: {body}"), ctx);
             ctx.emit(SwarmSessionsEvent::Attention { title, body });
         }
         ctx.emit(SwarmSessionsEvent::Changed);
+    }
+
+    fn open_layout(&mut self, host: Host, token: String, ctx: &mut ModelContext<Self>) {
+        let mut sessions: Vec<DaemonSession> = self
+            .sessions_on(host.as_deref())
+            .iter()
+            .filter(|s| s.ui.get(daemon::META_LAYOUT_OPEN) == Some(&token))
+            .cloned()
+            .collect();
+        for s in &sessions {
+            let ui = std::collections::BTreeMap::from([(daemon::META_LAYOUT_OPEN.to_string(), String::new())]);
+            daemon::set_session_meta(host.clone(), s.id.clone(), ui);
+        }
+        // Already open (reattached at launch, or in another window): left alone.
+        sessions.retain(|s| s.is_running() && s.clients.is_empty());
+        let order = |s: &DaemonSession, key: &str| s.ui.get(key).and_then(|v| v.parse::<usize>().ok()).unwrap_or(0);
+        sessions.sort_by_key(|s| (order(s, daemon::META_LAYOUT_TAB), order(s, daemon::META_LAYOUT_PANE)));
+        if !sessions.is_empty() {
+            ctx.emit(SwarmSessionsEvent::OpenLayout { host, sessions });
+        }
     }
 
     fn on_link_lost(&mut self, (host, id): (Host, String), ctx: &mut ModelContext<Self>) {
@@ -527,6 +564,22 @@ impl SwarmSessions {
                 Some((tab, what))
             })
             .collect()
+    }
+
+    /// Daemon session `id`'s host, if this app follows it.
+    pub fn host_of(&self, id: &str) -> Option<Host> {
+        self.by_host.iter().find(|(_, sessions)| sessions.iter().any(|s| s.id == id)).map(|(h, _)| h.clone())
+    }
+
+    /// Whether session `id` on `host` runs Claude Code waiting for permission
+    /// to do something: then a notification can answer yes ("Allow Once").
+    pub fn awaiting_permission(&self, host: &Host, id: &str) -> bool {
+        let Some(status) = self.statuses.get(&(host.clone(), id.to_string())) else { return false };
+        status.headline().is_some_and(|r| {
+            r.state == daemon::StatusState::Blocked
+                && r.kind == Some(daemon::BlockedKind::Permission)
+                && status.app_of(r) == Some("claude-code")
+        })
     }
 
     /// Running local sessions no client is attached to, oldest first.

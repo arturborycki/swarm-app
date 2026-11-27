@@ -3,6 +3,29 @@
 
 #import <UserNotifications/UserNotifications.h>
 
+NSString *const WarpSwarmAllowAction = @"SWARM_ALLOW";
+
+NSSet *warpNotificationCategories(void) {
+    UNNotificationCategory *plain =
+        [UNNotificationCategory categoryWithIdentifier:@"CUSTOMIZED_NOTIFICATION"
+                                               actions:@[]
+                                     intentIdentifiers:@[]
+                                               options:UNNotificationCategoryOptionCustomDismissAction];
+    // Answering doesn't bring the app forward; opening the session does.
+    UNNotificationAction *allow = [UNNotificationAction actionWithIdentifier:WarpSwarmAllowAction
+                                                                       title:@"Allow Once"
+                                                                     options:UNNotificationActionOptionNone];
+    UNNotificationAction *open = [UNNotificationAction actionWithIdentifier:@"SWARM_OPEN"
+                                                                      title:@"Open"
+                                                                    options:UNNotificationActionOptionForeground];
+    UNNotificationCategory *permission =
+        [UNNotificationCategory categoryWithIdentifier:@"SWARM_PERMISSION"
+                                               actions:@[ allow, open ]
+                                     intentIdentifiers:@[]
+                                               options:UNNotificationCategoryOptionCustomDismissAction];
+    return [NSSet setWithObjects:plain, permission, nil];
+}
+
 void requestNotificationPermissionsWithCompletionHandler(
     void (^completion_handler)(NSUInteger outcome_type, id outcome_msg)) {
     UNUserNotificationCenter *center = [UNUserNotificationCenter currentNotificationCenter];
@@ -16,18 +39,8 @@ void requestNotificationPermissionsWithCompletionHandler(
                         } else if (error != nil) {
                             completion_handler(2, error.localizedDescription);
                         } else {
-                            // Create and register the notification category.
-                            UNNotificationCategory *CustomizedNotification = [UNNotificationCategory
-                                categoryWithIdentifier:@"CUSTOMIZED_NOTIFICATION"
-                                               actions:@[]
-                                     intentIdentifiers:@[]
-                                               options:
-                                                   UNNotificationCategoryOptionCustomDismissAction];
-
-                            [center
-                                setNotificationCategories:[NSSet
-                                                              setWithObjects:CustomizedNotification,
-                                                                             nil]];
+                            // Register the notification categories.
+                            [center setNotificationCategories:warpNotificationCategories()];
                             completion_handler(0,
                                                @"User accepted request to receive notifications.");
                         }
@@ -67,6 +80,11 @@ void sendNotificationWithErrorHandler(NSString *title, NSString *body, NSString 
           content.userInfo = @{
               @"DATA" : data,
           };
+          // swarm-term: a session whose program waits for permission (the app
+          // writes this into the data) gets the "Allow Once" button.
+          if ([data containsString:@"\"permission\":true"]) {
+              content.categoryIdentifier = @"SWARM_PERMISSION";
+          }
 
           // Configure the trigger to send the notification after 1 second.
           UNTimeIntervalNotificationTrigger *trigger =

@@ -325,6 +325,9 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             // ⇧⌘K (DESIGN §9b) clears lines in the input editor and ⌃⌘K opens
             // the keyboard shortcuts; ⌃⌘H (host) is free.
             swarm_workspace_item_with_key("Connect to Host…", WorkspaceAction::SwarmShowConnect, Some("ctrl-cmd-h")),
+            MenuItem::Separator,
+            swarm_workspace_item("Start Layout…", WorkspaceAction::SwarmChooseLayout),
+            swarm_workspace_item("Save Window as Layout…", WorkspaceAction::SwarmSaveLayout),
         ]);
     }
     file_menu_options.extend([
@@ -636,6 +639,10 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
             [
                 swarm_workspace_item_with_key("Mark as Unread", WorkspaceAction::SwarmMarkUnread, Some("alt-cmd-u")),
                 swarm_workspace_item("Mute or Unmute Session", WorkspaceAction::SwarmToggleMute),
+                MenuItem::Separator,
+                swarm_workspace_item("Run Again After Reboot", WorkspaceAction::SwarmToggleRestart),
+                swarm_workspace_item("Export Output…", WorkspaceAction::SwarmExportOutput),
+                swarm_workspace_item("Start or Stop Recording…", WorkspaceAction::SwarmToggleRecording),
                 MenuItem::Separator,
                 swarm_workspace_item_with_key("Navigate Back", WorkspaceAction::SwarmNavigateBack, Some("ctrl-cmd-[")),
                 swarm_workspace_item_with_key("Navigate Forward", WorkspaceAction::SwarmNavigateForward, Some("ctrl-cmd-]")),
@@ -1378,6 +1385,8 @@ pub fn swarm_status_menu() -> Menu {
     Menu::new(
         crate::swarm::APP_NAME,
         vec![
+            swarm_status_needs_you_submenu(),
+            MenuItem::Separator,
             swarm_status_sessions_submenu("This Mac".to_string(), None),
             MenuItem::Custom(CustomMenuItem::new_with_submenu(
                 "Remote Hosts",
@@ -1406,6 +1415,46 @@ pub fn swarm_status_menu() -> Menu {
             MenuItem::Standard(StandardAction::Quit),
         ],
     )
+}
+
+/// "Needs You (n)" ▸ the sessions whose program waits for the user, that
+/// failed or lost their connection, on every host: choosing one opens it.
+fn swarm_status_needs_you_submenu() -> MenuItem {
+    MenuItem::Custom(CustomMenuItem::new_with_submenu(
+        "Needs You",
+        |_| (),
+        move |_props, ctx| {
+            #[cfg(unix)]
+            let needing = crate::swarm::sessions::SwarmSessions::as_ref(ctx).needing_attention();
+            #[cfg(not(unix))]
+            let needing: Vec<(crate::swarm::ReattachTab, String)> = {
+                let _ = ctx;
+                Vec::new()
+            };
+            let count = needing.len();
+            let items: Vec<MenuItem> = needing
+                .into_iter()
+                .map(|(tab, what)| {
+                    let name = tab.title().unwrap_or_else(|| "A session".to_string());
+                    let label = format!("{} — {}", crate::swarm::menu_text(&name), crate::swarm::menu_text(&what));
+                    MenuItem::Custom(CustomMenuItem::new(
+                        &label,
+                        move |ctx| ctx.dispatch_global_action("root_view:swarm_open_session", &tab),
+                        no_updates,
+                        None,
+                    ))
+                })
+                .collect();
+            MenuItemPropertyChanges {
+                name: Some(if count == 0 { "Nothing Needs You".to_string() } else { format!("Needs You ({count})") }),
+                disabled: Some(count == 0),
+                submenu: Some(Some(items)),
+                ..Default::default()
+            }
+        },
+        None,
+        vec![],
+    ))
 }
 
 /// `title` ▸ the sessions on `host` (`None`: this Mac), as last seen.
