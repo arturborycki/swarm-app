@@ -487,8 +487,10 @@ fn make_new_view_menu(ctx: &AppContext) -> Menu {
             Some("alt-cmd-f"),
         ));
     }
+    if !crate::swarm::SWARM_CHROME {
+        items.push(updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx));
+    }
     items.extend(vec![
-        updateable_custom_item_without_checkmark(CustomAction::ToggleWarpDrive, ctx),
         MenuItem::Separator,
         updateable_custom_item_without_checkmark(CustomAction::CommandPalette, ctx),
         updateable_custom_item_without_checkmark(CustomAction::NavigationPalette, ctx),
@@ -640,6 +642,7 @@ fn make_new_tab_menu(ctx: &AppContext) -> Menu {
                 MenuItem::Separator,
                 swarm_workspace_item_with_key("Copy Mode", WorkspaceAction::SwarmCopyMode, Some("cmd-shift-X")),
                 swarm_workspace_item_with_key("Go to Directory…", WorkspaceAction::SwarmChooseDirectory, Some("cmd-shift-G")),
+                swarm_workspace_item_with_key("Find in All Sessions…", WorkspaceAction::SwarmFindInAllSessions, Some("cmd-shift-F")),
                 swarm_workspace_item_with_key("Insert Path…", WorkspaceAction::SwarmInsertPath, Some("cmd-shift-I")),
                 swarm_workspace_item_with_key("Quick Look Selection", WorkspaceAction::SwarmQuickLook, Some("cmd-shift-Y")),
             ],
@@ -716,9 +719,14 @@ fn make_new_blocks_menu(ctx: &AppContext) -> Menu {
         ctx,
     ));
     items.push(MenuItem::Separator);
+    // swarm-term: sharing blocks is a Warp server feature.
+    if !crate::swarm::HIDE_WARP_SERVICES {
+        items.extend([
+            updateable_custom_item_without_checkmark(CustomAction::CreateBlockPermalink, ctx),
+            non_updateable_custom_item(CustomAction::ViewSharedBlocks, ctx),
+        ]);
+    }
     items.extend([
-        updateable_custom_item_without_checkmark(CustomAction::CreateBlockPermalink, ctx),
-        non_updateable_custom_item(CustomAction::ViewSharedBlocks, ctx),
         updateable_custom_item_without_checkmark(CustomAction::ToggleBookmarkBlock, ctx),
         updateable_custom_item_without_checkmark(CustomAction::FindWithinBlock, ctx),
         MenuItem::Separator,

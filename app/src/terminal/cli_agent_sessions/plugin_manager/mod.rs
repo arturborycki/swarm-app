@@ -253,6 +253,11 @@ pub(crate) fn plugin_manager_for_with_shell(
     shell_type: Option<ShellType>,
     path_env_var: Option<String>,
 ) -> Option<Box<dyn CliAgentPluginManager>> {
+    // swarm-term: Warp's plugins report to Warp; Swarm sets agents up itself
+    // (Swarm → Set Up Coding Agents…, `swarmctl agents install`).
+    if crate::swarm::HIDE_WARP_SERVICES {
+        return None;
+    }
     match agent {
         CLIAgent::Claude => Some(Box::new(ClaudeCodePluginManager::new(
             shell_path,

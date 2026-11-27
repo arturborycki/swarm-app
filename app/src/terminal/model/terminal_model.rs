@@ -379,6 +379,10 @@ pub struct TerminalModel {
     /// For fullscreen programs like vim.
     alt_screen: AltScreen,
 
+    /// swarm-term: a reattached daemon session's past output has all been
+    /// replayed (the bridge marks its end with an empty `SwarmTime`).
+    swarm_replayed: bool,
+
     /// True if the local user has made edits in the input editor since the last submit (shell or AI).
     is_input_dirty: bool,
 
@@ -1086,6 +1090,7 @@ impl TerminalModel {
 
         Self {
             alt_screen,
+            swarm_replayed: false,
             is_input_dirty: false,
             block_list,
             lifecycle_coordinator: BlockLifecycleCoordinator::default(),
@@ -2083,6 +2088,11 @@ impl TerminalModel {
         &mut self.alt_screen
     }
 
+    /// swarm-term: a reattached session's past output has all been replayed.
+    pub fn swarm_replayed(&self) -> bool {
+        self.swarm_replayed
+    }
+
     pub fn is_alt_screen_active(&self) -> bool {
         self.alt_screen_active
     }
@@ -3046,6 +3056,9 @@ impl ansi::Handler for TerminalModel {
     }
 
     fn set_output_time(&mut self, unix_ms: Option<u64>) {
+        if unix_ms.is_none() {
+            self.swarm_replayed = true;
+        }
         self.block_list.set_output_time(unix_ms);
     }
 

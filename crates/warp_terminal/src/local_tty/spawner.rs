@@ -221,10 +221,25 @@ impl PtySpawner {
         let throwaway = options.env_vars.remove(std::ffi::OsStr::new(super::daemon::NO_DAEMON_ENV)).is_some();
         #[cfg(unix)]
         if let Some(daemon) = self.daemon.as_ref().filter(|_| !throwaway) {
+            let reattach = options.env_vars.contains_key(std::ffi::OsStr::new(super::daemon::REATTACH_SESSION_ENV));
+            let host = options
+                .env_vars
+                .get(std::ffi::OsStr::new(super::daemon::REATTACH_HOST_ENV))
+                .map(|h| h.to_string_lossy().into_owned());
             match daemon.spawn(options.clone()) {
                 Ok(result) => {
                     hooks.spawned(PtySpawnMode::Daemon, ctx);
                     return Ok(result);
+                }
+                // A tab for an existing session (here or on a host) must not
+                // turn into a new shell on this Mac: the tab still says it's
+                // that session. It shows the error; the session keeps running.
+                Err(err) if reattach => {
+                    let place = host.map(|h| format!(" on {h}")).unwrap_or_default();
+                    return Err(err.context(format!(
+                        "Couldn't reconnect to the session{place}. It keeps running there: open it \
+                         again with File > Open Session… (⌘O) once the connection is back."
+                    )));
                 }
                 Err(err) => log::warn!("swarm: starting a local shell instead of a daemon session: {err:#}"),
             }

@@ -5,6 +5,8 @@ pub mod app_icon;
 pub mod app_installation_detection;
 // swarm-term: when Swarm downloads and installs updates.
 pub mod swarm_updates;
+// swarm-term: tmux-style prefix keys.
+pub mod swarm_keys;
 mod block_visibility;
 mod changelog;
 pub mod cloud_preferences;

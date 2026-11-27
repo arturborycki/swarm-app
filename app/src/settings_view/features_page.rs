@@ -4902,10 +4902,11 @@ impl SettingsWidget for LoginItemWidget {
     ) -> Box<dyn Element> {
         let general_settings = GeneralSettings::as_ref(app);
         let ui_builder = appearance.ui_builder();
+        let app_name = if crate::swarm::SWARM_CHROME { "Swarm" } else { "Warp" };
         #[cfg(target_os = "macos")]
-        let label = "Start Warp at login (requires macOS 13+)";
+        let label = format!("Start {app_name} at login (requires macOS 13+)");
         #[cfg(not(target_os = "macos"))]
-        let label = "Start Warp at login";
+        let label = format!("Start {app_name} at login");
         render_body_item::<FeaturesPageAction>(
             label.into(),
             None,
@@ -4987,6 +4988,11 @@ struct ShowChangelogWidget {
 
 impl SettingsWidget for ShowChangelogWidget {
     type View = FeaturesPageView;
+
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
 
     fn search_terms(&self) -> &str {
         "changelog updates"
@@ -5509,6 +5515,11 @@ struct ConfirmCloseSharedSessionWidget {
 
 impl SettingsWidget for ConfirmCloseSharedSessionWidget {
     type View = FeaturesPageView;
+
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
 
     fn search_terms(&self) -> &str {
         "warning popup modal dialog shared session close"
@@ -7454,6 +7465,11 @@ struct DefaultSessionModeWidget {}
 
 impl SettingsWidget for DefaultSessionModeWidget {
     type View = FeaturesPageView;
+
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
 
     fn search_terms(&self) -> &str {
         "default session mode agent terminal new pane tab open config"

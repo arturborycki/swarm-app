@@ -219,6 +219,13 @@ impl PrivacyPageView {
     }
 
     fn build_page() -> PageType<Self> {
+        // swarm-term: Swarm sends no analytics or crash reports and has no
+        // Warp account, cloud conversations or Warp privacy policy: only
+        // secret redaction is left.
+        if crate::swarm::HIDE_WARP_SERVICES {
+            let widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![Box::new(SecretRedactionWidget::default())];
+            return PageType::new_uncategorized(widgets, Some(PageTitle::new("Privacy")));
+        }
         let mut widgets: Vec<Box<dyn SettingsWidget<View = Self>>> = vec![
             Box::new(SecretRedactionWidget::default()),
             Box::new(AppAnalyticsWidget::default()),

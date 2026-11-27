@@ -4768,6 +4768,10 @@ impl PaneGroup {
         if !self.pane_contents.contains_key(&pane_id) {
             return;
         }
+        // swarm-term: a pane closed in resize mode takes its "Resize mode" toast with it.
+        if let Some(terminal_view) = self.terminal_view_from_pane_id(pane_id, ctx) {
+            terminal_view.update(ctx, |view, ctx| view.swarm_end_resize_mode(ctx));
+        }
 
         // Remove any share modal associated with the closing session before
         // taking an early return for the last pane or an already-hidden pane.

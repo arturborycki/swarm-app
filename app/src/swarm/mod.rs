@@ -8,8 +8,6 @@
 #[cfg(unix)]
 pub mod connect;
 
-/// Tabs the focused pane can move to, as (pane group, title), for Go to Anything's
-/// "Move pane to …" rows. Set when the palette opens.
 /// The focused pane's session (its Warp session id and name) for Go to Anything's "Rename pane
 /// to …" row. Set when Rename Pane… opens the palette.
 pub static PANE_RENAME_TARGET: std::sync::Mutex<Option<(u64, String)>> = std::sync::Mutex::new(None);
@@ -18,7 +16,56 @@ pub static PANE_RENAME_TARGET: std::sync::Mutex<Option<(u64, String)>> = std::sy
 /// Set when Go to Directory… opens the palette.
 pub static CD_TARGET: std::sync::Mutex<Option<(u64, Option<String>)>> = std::sync::Mutex::new(None);
 
+/// Tabs the focused pane can move to, as (pane group, title), for Go to Anything's
+/// "Move pane to …" rows. Set when the palette opens.
 pub static PANE_MOVE_TARGETS: std::sync::Mutex<Vec<(warpui::EntityId, String)>> = std::sync::Mutex::new(Vec::new());
+/// Text searched for in sessions' output. Actions are logged with their `Debug` text, and
+/// this may be a token or a password: it isn't shown there.
+#[derive(Clone, PartialEq, Eq)]
+pub struct SearchText(pub String);
+
+impl std::fmt::Debug for SearchText {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SearchText(…{} characters)", self.0.chars().count())
+    }
+}
+
+/// The last Find in All Sessions, for Go to Anything's "find …" rows.
+#[cfg(unix)]
+pub static FIND_RESULTS: std::sync::Mutex<Option<FindResults>> = std::sync::Mutex::new(None);
+
+/// Counts searches, so the answer to an older one is dropped.
+#[cfg(unix)]
+pub static FIND_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How long the last search's lines are kept: output moves on, and they may hold secrets.
+#[cfg(unix)]
+pub const FIND_RESULTS_KEPT: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+#[cfg(unix)]
+pub struct FindResults {
+    pub text: String,
+    pub at: std::time::Instant,
+    /// Per session (its host, `None` for this Mac), the matching lines.
+    pub found: Vec<FoundIn>,
+    /// Hosts and sessions that weren't searched, as words for the user.
+    pub not_searched: Vec<String>,
+}
+
+/// The last search's results for `text`, if they're recent; older ones are dropped.
+#[cfg(unix)]
+pub fn recent_find_results<T>(text: Option<&str>, read: impl FnOnce(&FindResults) -> T) -> Option<T> {
+    let mut results = FIND_RESULTS.lock().unwrap_or_else(|e| e.into_inner());
+    if results.as_ref().is_some_and(|r| r.at.elapsed() > FIND_RESULTS_KEPT) {
+        *results = None;
+    }
+    results.as_ref().filter(|r| text.is_none_or(|t| r.text == t)).map(read)
+}
+
+/// A session's matching lines and its host (`None`: this Mac).
+#[cfg(unix)]
+pub type FoundIn = (Option<String>, warp_terminal::local_tty::daemon::SessionHits);
+
 pub mod copy_motion;
 pub mod theme_import;
 #[cfg(unix)]
@@ -37,7 +84,7 @@ pub mod widgets;
 /// Swarm's own window chrome (title bar, session menus) instead of Warp's.
 pub const SWARM_CHROME: bool = true;
 
-/// Hide Warp features that need Warp's servers (session sharing). Off in unit
+/// Hide Warp features that need Warp's servers (session sharing, Warp Drive). Off in unit
 /// tests, which still cover those features.
 pub const HIDE_WARP_SERVICES: bool = SWARM_CHROME && !cfg!(test);
 
@@ -404,5 +451,40 @@ mod tests {
         assert_eq!(remote_home_relative("/rootfs"), "/rootfs");
         assert_eq!(remote_home_relative("/home/"), "/home/");
         assert_eq!(remote_home_relative("/srv/web"), "/srv/web");
+    }
+}
+
+/// Warp's command-line commands (Oz agents, `login`, cloud runs) need a Warp
+/// account, which Swarm doesn't have. Help and version say what this binary
+/// is; those commands are refused. Internal, hidden commands the app runs
+/// itself go on to Warp's parser.
+pub fn handle_command_line() {
+    const WARP_COMMANDS: &[&str] = &[
+        "agent", "environment", "e", "mcp", "run", "task", "model", "memory-store", "memory-stores", "memory",
+        "login", "logout", "whoami", "provider", "integration", "i", "schedule", "secret", "federate", "artifact",
+        "api-key", "runner", "completions", "dump-settings-schema",
+    ];
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let Some(first) = args.first() else { return };
+    let version = env!("CARGO_PKG_VERSION");
+    match first.as_str() {
+        "-h" | "--help" | "help" => {
+            println!(
+                "Swarm {version}: a terminal whose sessions keep running, here and over SSH.\n\n\
+                 Usage: open -a Swarm\n\n\
+                 Manage sessions from a shell with swarmctl (swarmctl --help), which is in\n\
+                 Swarm.app/Contents/MacOS. Documentation: https://swarm-term.com/docs/"
+            );
+            std::process::exit(0);
+        }
+        "-V" | "--version" => {
+            println!("Swarm {version}");
+            std::process::exit(0);
+        }
+        cmd if WARP_COMMANDS.contains(&cmd) => {
+            eprintln!("swarm: '{cmd}' isn't a Swarm command. To manage sessions, use swarmctl (swarmctl --help).");
+            std::process::exit(2);
+        }
+        _ => {}
     }
 }

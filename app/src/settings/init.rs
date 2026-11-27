@@ -13,6 +13,7 @@ use super::app_installation_detection::UserAppInstallDetectionSettings;
 use super::cloud_preferences::CloudPreferencesSettings;
 use super::initializer::SettingsInitializer;
 use super::native_preference::NativePreferenceSettings;
+use super::swarm_keys::SwarmKeySettings;
 use super::swarm_updates::SwarmUpdateSettings;
 use super::{
     AISettings, AccessibilitySettings, AliasExpansionSettings, AppEditorSettings,
@@ -92,6 +93,7 @@ pub fn register_all_settings(ctx: &mut AppContext) {
     UserAppInstallDetectionSettings::register(ctx);
     AppIconSettings::register(ctx);
     SwarmUpdateSettings::register(ctx);
+    SwarmKeySettings::register(ctx);
     AppEditorSettings::register(ctx);
     InputSettings::register(ctx);
     WarpifySettings::register(ctx);

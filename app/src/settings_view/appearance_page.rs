@@ -1443,7 +1443,10 @@ impl AppearanceSettingsPageView {
         if cfg!(feature = "local_fs") && FeatureFlag::GlobalSearch.is_enabled() {
             tools_panel_widgets.push(Box::new(ToolsPanelGlobalSearchWidget::default()));
         }
-        tools_panel_widgets.push(Box::new(ToolsPanelWarpDriveWidget::default()));
+        // swarm-term: no Warp Drive.
+        if !crate::swarm::HIDE_WARP_SERVICES {
+            tools_panel_widgets.push(Box::new(ToolsPanelWarpDriveWidget::default()));
+        }
         if !tools_panel_widgets.is_empty() {
             categories.push(Category::new("Tools panel", tools_panel_widgets));
         }
@@ -3054,6 +3057,11 @@ struct CustomAppIconWidget {
 impl SettingsWidget for CustomAppIconWidget {
     type View = AppearanceSettingsPageView;
 
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
+
     fn search_terms(&self) -> &str {
         "customize custom app icon icons dock cmd tab app switcher"
     }
@@ -3674,6 +3682,11 @@ struct ToolsPanelConversationHistoryWidget {
 impl SettingsWidget for ToolsPanelConversationHistoryWidget {
     type View = AppearanceSettingsPageView;
 
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
+
     fn search_terms(&self) -> &str {
         "tools panel tabs conversation history agent conversations left panel visibility"
     }
@@ -3752,6 +3765,11 @@ struct ToolsPanelWarpDriveWidget {
 
 impl SettingsWidget for ToolsPanelWarpDriveWidget {
     type View = AppearanceSettingsPageView;
+
+    // swarm-term: a Warp feature Swarm doesn't have.
+    fn should_render(&self, _app: &AppContext) -> bool {
+        !crate::swarm::HIDE_WARP_SERVICES
+    }
 
     fn search_terms(&self) -> &str {
         "tools panel tabs warp drive left panel visibility"

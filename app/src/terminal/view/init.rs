@@ -322,6 +322,10 @@ pub fn init(app: &mut AppContext) {
         app.register_fixed_bindings(bindings);
     }
 
+    // swarm-term: tmux-style prefix keys, when turned on in Settings → Keyboard Shortcuts.
+    // Priority bindings, so the prefix wins over the input editor's own Ctrl-B and Ctrl-A.
+    app.register_priority_bindings(swarm_prefix_bindings());
+
     app.register_fixed_bindings([
         FixedBinding::new(
             "shift-left",
@@ -614,6 +618,8 @@ pub fn init(app: &mut AppContext) {
             "Share selected block",
             TerminalAction::OpenShareModal,
         )
+        // swarm-term: sharing blocks is a Warp server feature.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_custom_action(CustomAction::CreateBlockPermalink)
         .with_context_predicate(
             id!("Terminal") & eq!("TerminalView_BlockSelectionCardinality", "One"),
@@ -1271,4 +1277,73 @@ fn register_input_mode_bindings(app: &mut AppContext) {
             id!(flags::IS_ANY_AI_ENABLED) & !id!(LONG_RUNNING_AGENT_REQUESTED_COMMAND_CONTEXT_KEY),
         ),
     ]);
+}
+
+/// swarm-term: `Ctrl-B` (or `Ctrl-A`) followed by tmux's keys for panes and tabs, and resize
+/// mode's arrow keys.
+fn swarm_prefix_bindings() -> Vec<FixedBinding> {
+    use crate::pane_group::{Direction, PaneGroupAction as P};
+    use crate::palette::PaletteMode;
+    use crate::server::telemetry::PaletteSource;
+    use crate::workspace::WorkspaceAction as W;
+    use warpui::keymap::macros::*;
+
+    let mut bindings = Vec::new();
+    for (prefix, flag, byte) in [("ctrl-b", "SwarmPrefixCtrlB", 0x02u8), ("ctrl-a", "SwarmPrefixCtrlA", 0x01u8)] {
+        let when = || id!("Terminal") & !id!("IMEOpen") & id!(flag);
+        let mut bind = |keys: &[&str], action: &dyn Fn(&str) -> FixedBinding| {
+            for key in keys {
+                bindings.push(action(&format!("{prefix} {key}")));
+            }
+        };
+        let palette = W::TogglePalette { mode: PaletteMode::Navigation, source: PaletteSource::Keybinding };
+        bind(&["c"], &|k| FixedBinding::new(k, W::AddDefaultTab, when()));
+        bind(&["%", "shift-%"], &|k| FixedBinding::new(k, P::Add(Direction::Right), when()));
+        bind(&["\"", "shift-\""], &|k| FixedBinding::new(k, P::Add(Direction::Down), when()));
+        bind(&["left"], &|k| FixedBinding::new(k, P::NavigateLeft, when()));
+        bind(&["right"], &|k| FixedBinding::new(k, P::NavigateRight, when()));
+        bind(&["up"], &|k| FixedBinding::new(k, P::NavigateUp, when()));
+        bind(&["down"], &|k| FixedBinding::new(k, P::NavigateDown, when()));
+        bind(&["o"], &|k| FixedBinding::new(k, P::NavigateNext, when()));
+        bind(&[";"], &|k| FixedBinding::new(k, P::NavigatePrev, when()));
+        bind(&["z"], &|k| FixedBinding::new(k, P::ToggleMaximizePane, when()));
+        bind(&["x"], &|k| FixedBinding::new(k, P::RemoveActive, when()));
+        bind(&["n"], &|k| FixedBinding::new(k, W::ActivateNextTab, when()));
+        bind(&["p"], &|k| FixedBinding::new(k, W::ActivatePrevTab, when()));
+        bind(&[","], &|k| FixedBinding::new(k, W::SwarmChoosePaneName, when()));
+        bind(&["["], &|k| FixedBinding::new(k, W::SwarmCopyMode, when()));
+        bind(&["w"], &|k| FixedBinding::new(k, palette.clone(), when()));
+        bind(&["r"], &|k| FixedBinding::new(k, TerminalAction::SwarmResizeModeEnter, when()));
+        bind(&[prefix], &|k| FixedBinding::new(k, TerminalAction::SwarmSendPrefix(byte), when()));
+        for number in 1..=9usize {
+            bind(&[&number.to_string()], &|k| FixedBinding::new(k, W::ActivateTabByNumber(number), when()));
+        }
+    }
+    let resizing = || id!("Terminal") & !id!("IMEOpen") & id!("SwarmResizeMode");
+    for (keys, action) in [
+        (["left", "h"], P::ResizeLeft),
+        (["right", "l"], P::ResizeRight),
+        (["up", "k"], P::ResizeUp),
+        (["down", "j"], P::ResizeDown),
+    ] {
+        for key in keys {
+            bindings.push(FixedBinding::new(key, action.clone(), resizing()));
+        }
+    }
+    for key in ["escape", "enter", "q"] {
+        bindings.push(FixedBinding::new(key, TerminalAction::SwarmResizeModeExit, resizing()));
+    }
+    bindings
+}
+
+#[cfg(test)]
+mod swarm_prefix_tests {
+    /// Every key in the table parses (a bad one would panic at launch), and each prefix has its
+    /// whole set.
+    #[test]
+    fn prefix_bindings_parse() {
+        let bindings = super::swarm_prefix_bindings();
+        // 29 keys after each of the two prefixes, and resize mode's 8 arrows plus 3 ways out.
+        assert_eq!(bindings.len(), 2 * 29 + 11);
+    }
 }

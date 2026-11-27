@@ -848,7 +848,8 @@ pub fn init(app: &mut AppContext) {
             WorkspaceAction::OpenGlobalSearch,
         )
         .with_context_predicate(id!("Workspace") & id!(flags::SHOW_GLOBAL_SEARCH))
-        .with_mac_key_binding("cmd-shift-F")
+        // swarm-term: ⇧⌘F is Find in All Sessions (Swarm menu); search in
+        // files stays on the left panel's button.
         // we use alt because we use ctrl-shift-f for find because ctrl-f needs to be reserved for the shell
         .with_linux_or_windows_key_binding("alt-shift-F"),
         EditableBinding::new(
@@ -1572,6 +1573,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             "Open Settings: Account",
             WorkspaceAction::ShowSettingsPage(SettingsSection::Account),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_context_predicate(id!("Workspace"))
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_custom_action(CustomAction::ShowAccount),
@@ -1597,6 +1600,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
                 .with_custom_description(bindings::MAC_MENUS_CONTEXT, "View Shared Blocks..."),
             WorkspaceAction::ShowSettingsPage(SettingsSection::SharedBlocks),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace"))
         .with_custom_action(CustomAction::ViewSharedBlocks),
@@ -1626,6 +1631,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
                 .with_custom_description(bindings::MAC_MENUS_CONTEXT, "Open Team Settings"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::Teams),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_custom_action(CustomAction::OpenTeamSettings)
         .with_context_predicate(id!("Workspace")),
@@ -1649,7 +1656,7 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             BindingDescription::new("Open Settings: AI"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::WarpAgent),
         )
-        .with_enabled(|| FeatureFlag::AgentMode.is_enabled())
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES && FeatureFlag::AgentMode.is_enabled())
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
@@ -1657,6 +1664,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             BindingDescription::new("Open Settings: Billing and usage"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::BillingAndUsage),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
@@ -1664,6 +1673,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             BindingDescription::new("Open Settings: Code"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::CodeIndexing),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
@@ -1671,6 +1682,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             BindingDescription::new("Open Settings: Referrals"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::Referrals),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
@@ -1678,6 +1691,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             BindingDescription::new("Open Settings: Environments"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::CloudEnvironments),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
@@ -1685,6 +1700,8 @@ fn add_open_setting_pages_as_editable_binding(app: &mut AppContext) {
             BindingDescription::new("Open Settings: MCP Servers"),
             WorkspaceAction::ShowSettingsPage(SettingsSection::AgentMCPServers),
         )
+        // swarm-term: a page Swarm doesn't show (Warp account and server features).
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_group(bindings::BindingGroup::Settings.as_str())
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
@@ -1708,6 +1725,8 @@ fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
             "Invite People...",
             WorkspaceAction::ShowReferralSettingsPage,
         )
+        // swarm-term: Warp's community, feedback, docs and policy links.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_context_predicate(id!("Workspace"))
         .with_custom_action(CustomAction::ReferAFriend),
         EditableBinding::new(
@@ -1715,18 +1734,24 @@ fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
             "Join our Slack community (opens external link)",
             WorkspaceAction::JoinSlack,
         )
+        // swarm-term: Warp's community, feedback, docs and policy links.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
             "workspace:link_to_user_docs",
             "View user docs (opens external link)",
             WorkspaceAction::ViewUserDocs,
         )
+        // swarm-term: Warp's community, feedback, docs and policy links.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_context_predicate(id!("Workspace")),
         EditableBinding::new(
             "workspace:send_feedback",
             BindingDescription::new("Send feedback (opens external link)"),
             WorkspaceAction::SendFeedback,
         )
+        // swarm-term: Warp's community, feedback, docs and policy links.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_context_predicate(id!("Workspace")),
         #[cfg(not(target_family = "wasm"))]
         EditableBinding::new(
@@ -1740,6 +1765,8 @@ fn add_overflow_menu_items_as_editable_binding(app: &mut AppContext) {
             "View privacy policy (opens external link)",
             WorkspaceAction::ViewPrivacyPolicy,
         )
+        // swarm-term: Warp's community, feedback, docs and policy links.
+        .with_enabled(|| !crate::swarm::HIDE_WARP_SERVICES)
         .with_context_predicate(id!("Workspace")),
     ]);
 }

@@ -13,6 +13,10 @@ use version_compare::{Cmp, Version};
 /// Where releases are published.
 const DEFAULT_FEED: &str = "https://swarm-term.com/releases/latest.json";
 
+/// Opened instead of an unsigned release's link when that link isn't on
+/// Swarm's own site or GitHub repository.
+const DOWNLOAD_PAGE: &str = "https://swarm-term.com/#download";
+
 /// This app's version.
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 
@@ -20,7 +24,8 @@ pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Update {
     pub version: String,
-    /// The DMG if the release has one, else the release page.
+    /// The DMG if the release has one, else the release page. Unless the DMG
+    /// is signed, always on swarm-term.com or Swarm's GitHub repository.
     pub url: String,
     /// What the app needs to install the DMG itself; `None` if the feed doesn't sign it.
     pub signed: Option<Signed>,
@@ -71,6 +76,20 @@ pub fn claim_offer(version: &str) -> bool {
         return false;
     }
     *offered = Some(version.to_string());
+    true
+}
+
+/// Whether the background check is due (none yet in this run, or the last
+/// one a day ago), and if so, marks it done now. Every window asks every
+/// hour, so checks go on whichever windows are closed, and run once a day.
+pub fn claim_daily_check() -> bool {
+    const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+    static LAST: std::sync::Mutex<Option<std::time::Instant>> = std::sync::Mutex::new(None);
+    let mut last = LAST.lock().unwrap_or_else(|e| e.into_inner());
+    if last.is_some_and(|at| at.elapsed() < DAY) {
+        return false;
+    }
+    *last = Some(std::time::Instant::now());
     true
 }
 
@@ -133,7 +152,7 @@ fn newer_release(body: &str, current: &str) -> Result<Option<Update>> {
         if !https(&release.html_url) {
             bail!("the release feed's link isn't https");
         }
-        return Ok(Some(Update { version, url: release.html_url, signed: None }));
+        return Ok(Some(Update { version, url: ours_or_download_page(release.html_url), signed: None }));
     };
     let signed = match (asset.sha256, asset.signature) {
         (Some(sha256), Some(signature)) => Some(Signed { sha256: sha256.to_ascii_lowercase(), signature }),
@@ -142,7 +161,32 @@ fn newer_release(body: &str, current: &str) -> Result<Option<Update>> {
     if !https(&asset.browser_download_url) {
         bail!("the release feed's download link isn't https");
     }
-    Ok(Some(Update { version, url: asset.browser_download_url, signed }))
+    // A signed DMG is checked before it's used; an unsigned one is opened in
+    // the browser for the user to install, so only from a place that's Swarm's.
+    let url = match signed {
+        Some(_) => asset.browser_download_url,
+        None => ours_or_download_page(asset.browser_download_url),
+    };
+    Ok(Some(Update { version, url, signed }))
+}
+
+/// `link` if it's on swarm-term.com or in Swarm's GitHub repository, else the
+/// site's download section.
+fn ours_or_download_page(link: String) -> String {
+    let ours = url::Url::parse(&link).is_ok_and(|u| {
+        u.scheme() == "https"
+            && u.port().is_none()
+            && match u.host_str() {
+                Some("swarm-term.com") => true,
+                Some("github.com") => u.path().starts_with("/arturborycki/swarm-term/"),
+                _ => false,
+            }
+    });
+    if ours {
+        link
+    } else {
+        DOWNLOAD_PAGE.to_string()
+    }
 }
 
 #[cfg(test)]
@@ -161,8 +205,24 @@ mod tests {
         );
         assert_eq!(
             newer_release(&body, "0.1.0").unwrap(),
-            Some(Update { version: "0.2.0".into(), url: "https://example.com/Swarm-0.2.0.dmg".into(), signed: None })
+            Some(Update { version: "0.2.0".into(), url: DOWNLOAD_PAGE.into(), signed: None }),
+            "an unsigned DMG elsewhere than Swarm's site is not opened"
         );
+        let ours = release(
+            "v0.2.0",
+            r#"{"name": "Swarm-0.2.0.dmg", "browser_download_url": "https://swarm-term.com/download/Swarm-0.2.0.dmg"}"#,
+        );
+        assert_eq!(newer_release(&ours, "0.1.0").unwrap().unwrap().url, "https://swarm-term.com/download/Swarm-0.2.0.dmg");
+    }
+
+    #[test]
+    fn only_swarm_links_are_opened() {
+        let page = |l: &str| ours_or_download_page(l.to_string());
+        assert_eq!(page("https://github.com/arturborycki/swarm-term/releases/tag/v1"), "https://github.com/arturborycki/swarm-term/releases/tag/v1");
+        assert_eq!(page("https://github.com/someone/else/releases"), DOWNLOAD_PAGE);
+        assert_eq!(page("https://swarm-term.com.evil.example/x"), DOWNLOAD_PAGE);
+        assert_eq!(page("https://swarm-term.com:8443/x"), DOWNLOAD_PAGE);
+        assert_eq!(page("https://user@evil.example/swarm-term.com"), DOWNLOAD_PAGE);
     }
 
     #[test]
@@ -173,13 +233,14 @@ mod tests {
         );
         let update = newer_release(&body, "0.1.0").unwrap().unwrap();
         assert_eq!(update.signed, Some(Signed { sha256: "abc1".into(), signature: "c2ln".into() }));
+        assert_eq!(update.url, "https://example.com/u", "a signed DMG is checked, wherever it's from");
         assert_eq!(signed_message(&update.version, "abc1"), "swarm-update:0.2.0:abc1");
     }
 
     #[test]
     fn release_without_dmg_offers_its_page() {
         let update = newer_release(&release("v0.1.10", ""), "0.1.9").unwrap().unwrap();
-        assert_eq!(update.url, "https://example.com/r/v0.1.10");
+        assert_eq!(update.url, DOWNLOAD_PAGE);
     }
 
     #[test]

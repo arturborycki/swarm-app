@@ -845,10 +845,10 @@ impl NotificationsTrigger {
                 "Swarm can notify you when long-running commands finish."
             }
             NotificationsTrigger::AgentTaskCompleted(..) => {
-                "Warp can notify you when an agent finishes responding."
+                "Swarm can notify you when an agent finishes responding."
             }
             NotificationsTrigger::NeedsAttention => {
-                "Warp can notify you when a command or agent needs your attention."
+                "Swarm can notify you when a command or agent needs your attention."
             }
             NotificationsTrigger::PasswordPrompt => {
                 "Swarm can notify you when you're prompted to enter a password."
@@ -2916,6 +2916,8 @@ pub struct TerminalView {
     cli_subagent_views: HashMap<BlockId, ViewHandle<CLISubagentView>>,
     /// swarm-term: copy mode is on; `true` once `v` started a selection.
     swarm_copy_mode: Option<bool>,
+    /// swarm-term: resize mode is on (`Ctrl-B r`): the arrow keys resize the pane.
+    swarm_resize_mode: bool,
     /// swarm-term: copy mode's selection takes whole lines (`V`).
     swarm_copy_lines: bool,
     /// swarm-term: the count typed for copy mode's next motion (0: none).
@@ -4528,6 +4530,7 @@ impl TerminalView {
             ignore_next_set_title_event: false,
             cli_subagent_views: Default::default(),
             swarm_copy_mode: None,
+            swarm_resize_mode: false,
             swarm_copy_lines: false,
             swarm_copy_count: 0,
             cli_subagent_controller,
@@ -17936,20 +17939,23 @@ impl TerminalView {
                 }
 
                 items.push(MenuItem::Separator);
-                items.push(
-                    MenuItemFields::new(share_block_label)
-                        .with_on_select_action(TerminalAction::ContextMenu(
-                            ContextMenuAction::OpenShareBlockModal {
-                                block_index: tail_block_index,
-                            },
-                        ))
-                        .with_key_shortcut_label(keybinding_name_to_display_string(
-                            "terminal:open_share_block_modal",
-                            ctx,
-                        ))
-                        .with_disabled(is_share_disabled)
-                        .into_item(),
-                );
+                // swarm-term: sharing blocks is a Warp server feature.
+                if !crate::swarm::HIDE_WARP_SERVICES {
+                    items.push(
+                        MenuItemFields::new(share_block_label)
+                            .with_on_select_action(TerminalAction::ContextMenu(
+                                ContextMenuAction::OpenShareBlockModal {
+                                    block_index: tail_block_index,
+                                },
+                            ))
+                            .with_key_shortcut_label(keybinding_name_to_display_string(
+                                "terminal:open_share_block_modal",
+                                ctx,
+                            ))
+                            .with_disabled(is_share_disabled)
+                            .into_item(),
+                    );
+                }
 
                 if FeatureFlag::CreatingSharedSessions.is_enabled()
                     && ContextFlag::CreateSharedSession.is_enabled()
@@ -20689,6 +20695,33 @@ impl TerminalView {
         });
     }
 
+    /// swarm-term: opens Find on `text`, for a line Find in All Sessions found here.
+    pub fn swarm_find(&mut self, text: &str, ctx: &mut ViewContext<Self>) {
+        self.show_find_bar(ctx);
+        self.find_bar.update(ctx, |bar, ctx| bar.set_query_text(text, ctx));
+    }
+
+    /// [`Self::swarm_find`] once a reattached session's output has been replayed, if this
+    /// pane still has focus then (the user may have moved on; Find takes focus).
+    pub fn swarm_find_when_replayed(&mut self, text: String, ctx: &mut ViewContext<Self>) {
+        self.swarm_find_after(text, std::time::Instant::now() + std::time::Duration::from_secs(20), ctx);
+    }
+
+    fn swarm_find_after(&mut self, text: String, give_up: std::time::Instant, ctx: &mut ViewContext<Self>) {
+        if !ctx.is_self_or_child_focused() {
+            return;
+        }
+        if self.model.lock().swarm_replayed() {
+            self.swarm_find(&text, ctx);
+            return;
+        }
+        if std::time::Instant::now() >= give_up {
+            return;
+        }
+        let tick = async { warpui::r#async::Timer::after(std::time::Duration::from_millis(150)).await };
+        let _ = ctx.spawn(tick, move |me, _, ctx| me.swarm_find_after(text, give_up, ctx));
+    }
+
     fn show_find_bar(&mut self, ctx: &mut ViewContext<Self>) {
         let model = self.model.lock();
         let inverted_blocklist = self.is_inverted_blocklist(ctx);
@@ -22325,6 +22358,9 @@ impl TerminalView {
         block_index: BlockIndex,
         ctx: &mut ViewContext<Self>,
     ) {
+        if crate::swarm::HIDE_WARP_SERVICES {
+            return;
+        }
         if AuthStateProvider::as_ref(ctx)
             .get()
             .is_anonymous_or_logged_out()
@@ -24132,6 +24168,30 @@ impl TerminalView {
     }
 
     /// swarm-term: leaves copy mode, clearing its cursor or selection.
+    /// swarm-term: turns resize mode on or off, with a toast saying how to use it while it's on.
+    pub fn swarm_end_resize_mode(&mut self, ctx: &mut ViewContext<Self>) {
+        self.swarm_resize_mode(false, ctx);
+    }
+
+    fn swarm_resize_mode(&mut self, on: bool, ctx: &mut ViewContext<Self>) {
+        if self.swarm_resize_mode == on {
+            return;
+        }
+        self.swarm_resize_mode = on;
+        let toast_id = format!("swarm-resize-{}", self.view_id);
+        let window_id = ctx.window_id();
+        ToastStack::handle(ctx).update(ctx, |stack, ctx| {
+            if on {
+                let text = "Resize mode: the arrow keys resize this pane. Esc or Enter ends it.".to_string();
+                let toast = DismissibleToast::new(text, ToastFlavor::Default).with_object_id(toast_id);
+                stack.add_persistent_toast(toast, window_id, ctx);
+            } else {
+                stack.remove_toast_by_identifier(toast_id, window_id, ctx);
+            }
+        });
+        ctx.notify();
+    }
+
     fn swarm_copy_mode_exit(&mut self, ctx: &mut ViewContext<Self>) {
         self.swarm_copy_lines = false;
         self.swarm_copy_count = 0;
@@ -28121,6 +28181,9 @@ impl TypedActionView for TerminalView {
             | SwarmCopyModeSearch
             | SwarmCopyModeYank
             | SwarmCopyModeExit
+            | SwarmSendPrefix(_)
+            | SwarmResizeModeEnter
+            | SwarmResizeModeExit
             | InsertMostRecentCommandCorrection
             | StopSharingCurrentSession { .. }
             | RequestSharedSessionRole(_)
@@ -28668,6 +28731,21 @@ impl TypedActionView for TerminalView {
                 }
             }
             SwarmCopyModeExit => self.swarm_copy_mode_exit(ctx),
+            SwarmSendPrefix(byte) => {
+                if self.is_long_running() {
+                    self.write_to_pty(vec![*byte], ctx);
+                } else {
+                    // At the prompt, what the key does in the input: Ctrl-A to the line's start,
+                    // Ctrl-B back a character.
+                    let editor = self.input.as_ref(ctx).editor().clone();
+                    editor.update(ctx, |editor, ctx| match byte {
+                        0x01 => editor.move_to_line_start(ctx),
+                        _ => editor.move_left(false, ctx),
+                    });
+                }
+            }
+            SwarmResizeModeEnter => self.swarm_resize_mode(true, ctx),
+            SwarmResizeModeExit => self.swarm_resize_mode(false, ctx),
             OnboardingFlow(version) => {
                 // Don't show onboarding if it's already active or if this is a shared session or if user is anonymous
                 if self
@@ -30017,6 +30095,10 @@ impl View for TerminalView {
     }
 
     fn on_blur(&mut self, blur_ctx: &BlurContext, ctx: &mut ViewContext<Self>) {
+        // swarm-term: resize mode ends when focus leaves the pane, from the input too.
+        if self.swarm_resize_mode && !ctx.is_self_or_child_focused() {
+            self.swarm_resize_mode(false, ctx);
+        }
         if blur_ctx.is_self_blurred() {
             // Make sure to close link tooltips when terminal view is not in focus.
             self.open_grid_link_tool_tip.take();
@@ -30053,6 +30135,19 @@ impl View for TerminalView {
 
         if self.swarm_copy_mode.is_some() {
             context.set.insert("SwarmCopyMode");
+        }
+        if self.swarm_resize_mode {
+            context.set.insert("SwarmResizeMode");
+        }
+        // Prefix keys only from the terminal or its input, not from fields inside the pane
+        // (Find), where Ctrl-A and Ctrl-B edit text.
+        let focused = app.focused_view_id(self.window_id);
+        if focused == Some(self.view_id) || focused == Some(input.editor().id()) {
+            match crate::settings::swarm_keys::SwarmKeySettings::as_ref(app).prefix.as_str() {
+                "ctrl-b" => context.set.insert("SwarmPrefixCtrlB"),
+                "ctrl-a" => context.set.insert("SwarmPrefixCtrlA"),
+                _ => false,
+            };
         }
         if model_lock.block_list().selection().is_some() {
             context.set.insert("ActiveBlockTextSelection");
