@@ -271,7 +271,15 @@ impl SyncDataSource for DataSource {
                 }
                 // Layouts to start (`swarmctl up`), listed once, with this Mac.
                 if host.is_none() {
-                    for name in crate::swarm::layout_names() {
+                    let names = crate::swarm::layout_names();
+                    if names.is_empty() {
+                        items.push((
+                            "Start layout: none saved yet, save this window as one".to_string(),
+                            "~/.config/swarm/layouts".to_string(),
+                            WorkspaceAction::SwarmSaveLayout,
+                        ));
+                    }
+                    for name in names {
                         items.push((
                             format!("Start layout {name}"),
                             "~/.config/swarm/layouts".to_string(),
