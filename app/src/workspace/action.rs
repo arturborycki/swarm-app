@@ -175,6 +175,18 @@ pub enum WorkspaceAction {
     /// swarm-term: mute the active tab's sessions (no notifications, no Dock
     /// badge), or unmute them if they all are.
     SwarmToggleMute,
+    /// swarm-term: run the focused session's last command again when it's
+    /// recreated after a reboot, or stop doing so.
+    SwarmToggleRestart,
+    /// swarm-term: save the focused session's output as a web page or text.
+    SwarmExportOutput,
+    /// swarm-term: start recording the focused session (asciicast), or stop.
+    SwarmToggleRecording,
+    /// swarm-term: start a layout (`swarmctl up`), chosen from the palette.
+    SwarmChooseLayout,
+    SwarmStartLayout(String),
+    /// swarm-term: save the active window's tabs and panes as a layout.
+    SwarmSaveLayout,
     /// swarm-term: show the active tab as having news until it's opened again.
     SwarmMarkUnread,
     /// swarm-term: go back to the tab (and pane) shown before this one.
@@ -1238,6 +1250,12 @@ impl WorkspaceAction {
             | SwarmCopyDebugInfo
             | SwarmSetUpAgents
             | SwarmToggleMute
+            | SwarmToggleRestart
+            | SwarmExportOutput
+            | SwarmToggleRecording
+            | SwarmChooseLayout
+            | SwarmStartLayout(_)
+            | SwarmSaveLayout
             | SwarmMarkUnread
             | SwarmNavigateBack
             | SwarmNavigateForward

@@ -2950,6 +2950,37 @@ pub(crate) fn app_callbacks(
             send_telemetry_from_app_ctx!(TelemetryEvent::QuitModalDisabled, ctx);
         })),
         on_notification_clicked: Some(Box::new(move |notification_response, ctx| {
+            // swarm-term: a session's notification opens it; "Allow Once"
+            // answers its program's permission prompt.
+            #[cfg(unix)]
+            if let Some(data) = notification_response.data() {
+                let (allow, json) = match data.strip_prefix(crate::notification::SWARM_ALLOW_PREFIX) {
+                    Some(rest) => (true, rest),
+                    None => (false, data),
+                };
+                if let Ok(NotificationContext::SwarmSession { host, session_id, .. }) =
+                    serde_json::from_str::<NotificationContext>(json)
+                {
+                    let sessions = crate::swarm::sessions::SwarmSessions::as_ref(ctx);
+                    if allow {
+                        // Only if it still waits: an answer typed into
+                        // anything else could do something else.
+                        if sessions.awaiting_permission(&host, &session_id) {
+                            warp_terminal::local_tty::daemon::write_to_session(host, session_id, b"\r".to_vec());
+                        }
+                        return;
+                    }
+                    let tab = sessions
+                        .sessions_on(host.as_deref())
+                        .iter()
+                        .find(|s| s.id == session_id)
+                        .map(|s| crate::swarm::ReattachTab::for_session(host.as_deref(), s));
+                    if let Some(tab) = tab {
+                        ctx.dispatch_global_action("root_view:swarm_open_session", &tab);
+                    }
+                    return;
+                }
+            }
             if let Some(notification_data) = notification_response.data() {
                 let context: serde_json::Result<NotificationContext> =
                     serde_json::from_str(notification_data);

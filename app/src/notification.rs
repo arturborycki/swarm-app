@@ -16,4 +16,15 @@ pub enum NotificationContext {
         pane_group_id: EntityId,
         pane_id: PaneId,
     },
+    /// swarm-term: about a daemon session (on `host`, `None` for this Mac).
+    /// `permission`: its program (Claude Code) waits for a yes, and the
+    /// notification offers "Allow Once".
+    SwarmSession {
+        host: Option<String>,
+        session_id: String,
+        permission: bool,
+    },
 }
+
+/// Put before a notification's data by the "Allow Once" button.
+pub const SWARM_ALLOW_PREFIX: &str = "allow:";
