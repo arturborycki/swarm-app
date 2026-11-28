@@ -274,7 +274,7 @@ impl SyncDataSource for DataSource {
                     let names = crate::swarm::layout_names();
                     if names.is_empty() {
                         items.push((
-                            "Start layout: none saved yet, save this window as one".to_string(),
+                            "Start layout: none saved yet, save this tab as one".to_string(),
                             "~/.config/swarm/layouts".to_string(),
                             WorkspaceAction::SwarmSaveLayout,
                         ));

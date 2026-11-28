@@ -1,6 +1,6 @@
 //! swarm-term: commands on the focused session that work through the
 //! bundled `swarmctl` (run again after a reboot, export, record) and
-//! layouts (`swarmctl up`, Save Window as Layout…).
+//! layouts (`swarmctl up`, Save Tab as Layout…).
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -216,12 +216,13 @@ impl Workspace {
         });
     }
 
-    /// Save Window as Layout…: this window's tabs, their panes, each
+    /// Save Tab as Layout…: the tab on screen and its panes, each
     /// session's host, folder and command to run again, as a layout file.
     pub(super) fn swarm_save_layout(&mut self, ctx: &mut ViewContext<Self>) {
         let sessions = SwarmSessions::as_ref(ctx);
+        // The tab on screen, with its panes: what you see is what's saved.
         let mut tabs = Vec::new();
-        for tab in &self.tabs {
+        for tab in self.tabs.iter().skip(self.active_tab_index).take(1) {
             let group = tab.pane_group.as_ref(ctx);
             let mut panes = Vec::new();
             for pane_id in group.visible_pane_ids() {
@@ -240,7 +241,7 @@ impl Workspace {
             }
         }
         if tabs.is_empty() {
-            self.swarm_alert("Nothing to save", "This window has no Swarm sessions.", ctx);
+            self.swarm_alert("Nothing to save", "This tab has no Swarm sessions.", ctx);
             return;
         }
         let text = layout_toml(&tabs);
@@ -336,7 +337,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_window_becomes_a_layout_file() {
+    fn tabs_become_a_layout_file() {
         let tabs = vec![
             vec![
                 SavedPane { host: None, name: Some("web \"app\"".into()), cwd: Some("/tmp".into()), run: Some("npm run dev".into()) },

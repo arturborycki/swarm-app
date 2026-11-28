@@ -327,7 +327,7 @@ fn make_new_file_menu(ctx: &AppContext) -> Menu {
             swarm_workspace_item_with_key("Connect to Host…", WorkspaceAction::SwarmShowConnect, Some("ctrl-cmd-h")),
             MenuItem::Separator,
             swarm_workspace_item("Start Layout…", WorkspaceAction::SwarmChooseLayout),
-            swarm_workspace_item("Save Window as Layout…", WorkspaceAction::SwarmSaveLayout),
+            swarm_workspace_item("Save Tab as Layout…", WorkspaceAction::SwarmSaveLayout),
         ]);
     }
     file_menu_options.extend([
